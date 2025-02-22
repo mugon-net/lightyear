@@ -12,7 +12,7 @@ use crate::transport::middleware::compression::zstd::decompression::ZstdDecompre
 use crate::transport::middleware::conditioner::LinkConditioner;
 use crate::transport::middleware::PacketReceiverWrapper;
 #[cfg(target_family = "wasm")]
-use crate::transport::mugon::MugonServerBuilder;
+use crate::transport::mugon::server::MugonServerBuilder;
 use crate::transport::udp::UdpSocketBuilder;
 #[cfg(all(feature = "websocket", not(target_family = "wasm")))]
 use crate::transport::websocket::server::WebSocketServerSocketBuilder;

@@ -11,19 +11,18 @@ use crate::server::io::{ServerIoEvent, ServerIoEventReceiver, ServerNetworkEvent
 use crate::transport::error::Error;
 use crate::transport::io::IoState;
 use crate::transport::mugon::common::{id_to_socket_addr, socket_addr_to_id};
-use crate::transport::webtransport::server::WebTransportServerSocket;
 use crate::transport::{BoxedReceiver, BoxedSender, PacketReceiver, PacketSender, Transport, MTU};
 use async_compat::Compat;
 use bevy::tasks::{futures_lite, IoTaskPool};
-use futures_util::TryFutureExt;
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, error, info};
+use wasm_bindgen::prelude::wasm_bindgen;
 
-#[wasm_bindgen::prelude::wasm_bindgen]
+#[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = acceptMugonSocketConnection)]
     async fn accept_new_connection() -> Option<u64>;
@@ -143,7 +142,7 @@ impl MugonServerSocket {
         clientbound_tx_map: Arc<Mutex<HashMap<SocketAddr, UnboundedSender<Message>>>>,
         status_tx: async_channel::Sender<ServerIoEvent>,
     ) {
-        info!("New WebSocket connection: {}", addr);
+        info!("New MugonSocket connection: {}", addr);
         let (clientbound_tx, mut clientbound_rx) = unbounded_channel::<Message>();
         clientbound_tx_map
             .lock()
@@ -196,7 +195,7 @@ impl PacketSender for MugonServerSocketSender {
             clientbound_tx
                 .send(Message::Binary(payload.to_vec()))
                 .map_err(|e| {
-                    Error::WebSocket(
+                    Error::Io(
                         std::io::Error::other(format!("unable to send message to client: {}", e))
                             .into(),
                     )
@@ -236,7 +235,7 @@ impl PacketReceiver for MugonServerSocketReceiver {
                 if e == TryRecvError::Empty {
                     Ok(None)
                 } else {
-                    Err(Error::WebSocket(
+                    Err(Error::Io(
                         std::io::Error::other(format!(
                             "unable to receive message from client: {}",
                             e
