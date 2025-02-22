@@ -11,6 +11,8 @@ use crate::transport::middleware::compression::zstd::compression::ZstdCompressor
 use crate::transport::middleware::compression::zstd::decompression::ZstdDecompressor;
 use crate::transport::middleware::conditioner::LinkConditioner;
 use crate::transport::middleware::PacketReceiverWrapper;
+#[cfg(target_family = "wasm")]
+use crate::transport::mugon::MugonServerBuilder;
 use crate::transport::udp::UdpSocketBuilder;
 #[cfg(all(feature = "websocket", not(target_family = "wasm")))]
 use crate::transport::websocket::server::WebSocketServerSocketBuilder;
@@ -34,6 +36,8 @@ pub enum ServerTransport {
         /// Certificate that will be used for authentication
         certificate: Identity,
     },
+    #[cfg(target_family = "wasm")]
+    Mugon,
     /// Use [`WebSocket`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket) as a transport
     #[cfg(all(feature = "websocket", not(target_family = "wasm")))]
     WebSocketServer { server_addr: SocketAddr },
@@ -66,6 +70,8 @@ impl Clone for ServerTransport {
                 server_addr: Clone::clone(__self_0),
                 certificate: __self_1.clone_identity(),
             },
+            #[cfg(target_family = "wasm")]
+            ServerTransport::Mugon => ServerTransport::Mugon,
             #[cfg(all(feature = "websocket", not(target_family = "wasm")))]
             ServerTransport::WebSocketServer {
                 server_addr: __self_0,
@@ -100,6 +106,8 @@ impl ServerTransport {
                     server_addr,
                 })
             }
+            #[cfg(target_family = "wasm")]
+            ServerTransport::Mugon => ServerTransportBuilderEnum::Mugon(MugonServerBuilder {}),
             ServerTransport::Channels { channels } => {
                 ServerTransportBuilderEnum::Channels(Channels::new(channels))
             }

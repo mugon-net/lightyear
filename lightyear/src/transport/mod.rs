@@ -52,6 +52,7 @@ pub(crate) mod error;
 #[cfg_attr(docsrs, doc(cfg(feature = "websocket")))]
 #[cfg(feature = "websocket")]
 pub(crate) mod websocket;
+pub(crate) mod mugon;
 
 pub const LOCAL_SOCKET: SocketAddr = SocketAddr::new(
     std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)),

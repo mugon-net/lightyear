@@ -3,6 +3,8 @@ use crate::transport::dummy::DummyIo;
 use crate::transport::error::Error as TransportError;
 use crate::transport::io::IoState;
 use crate::transport::local::{LocalChannel, LocalChannelBuilder};
+#[cfg(target_family = "wasm")]
+use crate::transport::mugon::client::{MugonClientSocket, MugonClientSocketBuilder};
 #[cfg(not(target_family = "wasm"))]
 use crate::transport::udp::{UdpSocket, UdpSocketBuilder};
 #[cfg(feature = "websocket")]
@@ -39,6 +41,8 @@ pub(crate) enum ClientTransportBuilderEnum {
     UdpSocket(UdpSocketBuilder),
     #[cfg(feature = "webtransport")]
     WebTransportClient(WebTransportClientSocketBuilder),
+    #[cfg(target_family = "wasm")]
+    Mugon(MugonClientSocketBuilder),
     #[cfg(feature = "websocket")]
     WebSocketClient(WebSocketClientSocketBuilder),
     LocalChannel(LocalChannelBuilder),
@@ -50,6 +54,8 @@ pub(crate) enum ClientTransportBuilderEnum {
 pub(crate) enum ClientTransportEnum {
     #[cfg(not(target_family = "wasm"))]
     UdpSocket(UdpSocket),
+    #[cfg(target_family = "wasm")]
+    Mugon(MugonClientSocket),
     #[cfg(feature = "webtransport")]
     WebTransportClient(WebTransportClientSocket),
     #[cfg(feature = "websocket")]

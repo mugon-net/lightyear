@@ -70,6 +70,8 @@ pub enum ClientTransports {
         #[cfg(target_family = "wasm")]
         certificate_digest: String,
     },
+    #[cfg(target_family = "wasm")]
+    Mugon,
     #[cfg(feature = "websocket")]
     WebSocket,
     #[cfg(feature = "steam")]
@@ -85,6 +87,8 @@ pub enum ServerTransports {
         local_port: u16,
         certificate: WebTransportCertificateSettings,
     },
+    #[cfg(target_family = "wasm")]
+    Mugon,
     #[cfg(feature = "websocket")]
     WebSocket {
         local_port: u16,
@@ -323,6 +327,15 @@ pub fn get_server_net_configs(settings: &Settings) -> Vec<server::NetConfig> {
                     transport_config,
                 )
             }
+            #[cfg(target_family = "wasm")]
+            ServerTransports::Mugon => {
+                let transport_config = server::ServerTransport::Mugon;
+                build_server_netcode_config(
+                    settings.server.conditioner.as_ref(),
+                    &settings.shared,
+                    transport_config,
+                )
+            }
             // TODO allow enum but filter if support not compiled in with a warning?
             // "Websocket transport configured but 'websocket' feature disabled"
             #[cfg(feature = "websocket")]
@@ -424,6 +437,14 @@ pub fn get_client_net_config(settings: &Settings, client_id: u64) -> client::Net
                 #[cfg(target_family = "wasm")]
                 certificate_digest: certificate_digest.to_string().replace(":", ""),
             },
+        ),
+        #[cfg(target_family = "wasm")]
+        ClientTransports::Mugon => build_client_netcode_config(
+            client_id,
+            server_addr,
+            settings.client.conditioner.as_ref(),
+            &settings.shared,
+            client::ClientTransport::Mugon,
         ),
         #[cfg(feature = "websocket")]
         ClientTransports::WebSocket => build_client_netcode_config(
