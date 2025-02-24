@@ -70,7 +70,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                 if let Ok(js_value) = JsFuture::from(connect()).await {
                     if let Some(connected) = js_value.as_bool() {
                         if connected {
-                            status_tx.send(ClientIoEvent::Connected).await?;
+                            status_tx.send(ClientIoEvent::Connected).await.unwrap();
                         }
 
                         let _ = send0.send(connected);
@@ -91,19 +91,19 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                             match event {
                                 ClientIoEvent::Disconnected(e) => {
                                     debug!("Stopping mugon io task. Reason: {:?}", e);
-                                    drop(addr_to_task);
                                     return;
                                 }
                                 _ => {}
                             }
                         }
-                        Ok(js_value) = JsFuture::from(receive(local_id)).await {
+                        Ok(js_value) = JsFuture::from(receive(local_id)).await => {
                             if let Some((data, closed)) = Into::<Option<(Vec<u8>, bool)>>::into(js_value) {
                                 if closed {
                                     let _ = status_tx.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was closed by the server or lost").into())).await;
-                                    // return;
+                                    debug!("Stopping mugon io task. Connection was dropped");
+                                    return;
                                 } else {
-                                    from_server_sender.send(data);
+                                    let _ = from_server_sender.send(data);
                                 };
                             }
                         }
