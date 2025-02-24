@@ -43,7 +43,7 @@ websocket = [
   "dep:wasm-bindgen-futures",
 ]
 steam = ["dep:steamworks"]
-mugon = ["dep:wasm-bindgen", "dep:js-sys"]
+mugon = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys"]
 track_change_detection = ["bevy/track_change_detection"]
 
 # compression
