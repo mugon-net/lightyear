@@ -26,6 +26,10 @@ use crate::transport::webtransport::client::{
 use crate::transport::webtransport::server::{
     WebTransportServerSocket, WebTransportServerSocketBuilder,
 };
+#[cfg(feature = "mugon")]
+use crate::transport::mugon::client::{MugonClientSocket, MugonClientSocketBuilder};
+#[cfg(feature = "mugon")]
+use crate::transport::mugon::server::{MugonServerSocket, MugonServerBuilder};
 
 /// io is a wrapper around the underlying transport layer
 pub mod io;

@@ -444,7 +444,7 @@ pub fn get_client_net_config(settings: &Settings, client_id: u64) -> client::Net
             server_addr,
             settings.client.conditioner.as_ref(),
             &settings.shared,
-            client::ClientTransport::Mugon,
+            client::ClientTransport::Mugon { server_addr },
         ),
         #[cfg(feature = "websocket")]
         ClientTransports::WebSocket => build_client_netcode_config(

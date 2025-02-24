@@ -44,7 +44,7 @@ pub enum ClientTransport {
         certificate_digest: String,
     },
     #[cfg(feature = "mugon")]
-    Mugon,
+    Mugon { server_addr: SocketAddr },
     /// Use [`WebSocket`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket) as a transport
     #[cfg(feature = "websocket")]
     WebSocketClient { server_addr: SocketAddr },
@@ -84,7 +84,7 @@ impl ClientTransport {
                 certificate_digest,
             }),
             #[cfg(feature = "mugon")]
-            ClientTransport::Mugon => {
+            ClientTransport::Mugon { server_addr } => {
                 ClientTransportBuilderEnum::Mugon(MugonClientSocketBuilder { server_addr })
             }
             #[cfg(feature = "websocket")]
