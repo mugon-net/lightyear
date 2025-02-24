@@ -52,6 +52,8 @@ pub(crate) mod error;
 #[cfg_attr(docsrs, doc(cfg(feature = "websocket")))]
 #[cfg(feature = "websocket")]
 pub(crate) mod websocket;
+#[cfg_attr(docsrs, doc(cfg(feature = "mugon")))]
+#[cfg(feature = "mugon")]
 pub(crate) mod mugon;
 
 pub const LOCAL_SOCKET: SocketAddr = SocketAddr::new(

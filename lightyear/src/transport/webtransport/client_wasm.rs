@@ -1,5 +1,5 @@
 #![cfg(target_family = "wasm")]
-//! WebTransport client implementationF.
+//! WebTransport client implementation.
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::sync::Arc;

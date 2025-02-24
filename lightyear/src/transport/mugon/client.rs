@@ -1,4 +1,4 @@
-#![cfg(target_family = "wasm")]
+#![cfg(feature = "mugon")]
 
 use crate::client::io::transport::{ClientTransportBuilder, ClientTransportEnum};
 use crate::client::io::{ClientIoEventReceiver, ClientNetworkEventSender};

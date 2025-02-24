@@ -12,9 +12,9 @@ use crate::transport::middleware::compression::zstd::compression::ZstdCompressor
 use crate::transport::middleware::compression::zstd::decompression::ZstdDecompressor;
 use crate::transport::middleware::conditioner::LinkConditioner;
 use crate::transport::middleware::PacketReceiverWrapper;
-#[cfg(target_family = "wasm")]
+#[cfg(feature = "mugon")]
 use crate::transport::mugon::client::MugonClientSocketBuilder;
-#[cfg(target_family = "wasm")]
+#[cfg(feature = "mugon")]
 use crate::transport::mugon::server::MugonServerSocket;
 #[cfg(not(target_family = "wasm"))]
 use crate::transport::udp::UdpSocketBuilder;
@@ -43,7 +43,7 @@ pub enum ClientTransport {
         #[cfg(target_family = "wasm")]
         certificate_digest: String,
     },
-    #[cfg(target_family = "wasm")]
+    #[cfg(feature = "mugon")]
     Mugon,
     /// Use [`WebSocket`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket) as a transport
     #[cfg(feature = "websocket")]
@@ -83,7 +83,7 @@ impl ClientTransport {
                 server_addr,
                 certificate_digest,
             }),
-            #[cfg(target_family = "wasm")]
+            #[cfg(feature = "mugon")]
             ClientTransport::Mugon => {
                 ClientTransportBuilderEnum::Mugon(MugonClientSocketBuilder { server_addr })
             }

@@ -70,7 +70,7 @@ pub enum ClientTransports {
         #[cfg(target_family = "wasm")]
         certificate_digest: String,
     },
-    #[cfg(target_family = "wasm")]
+    #[cfg(feature = "mugon")]
     Mugon,
     #[cfg(feature = "websocket")]
     WebSocket,
@@ -87,7 +87,7 @@ pub enum ServerTransports {
         local_port: u16,
         certificate: WebTransportCertificateSettings,
     },
-    #[cfg(target_family = "wasm")]
+    #[cfg(feature = "mugon")]
     Mugon,
     #[cfg(feature = "websocket")]
     WebSocket {
@@ -327,7 +327,7 @@ pub fn get_server_net_configs(settings: &Settings) -> Vec<server::NetConfig> {
                     transport_config,
                 )
             }
-            #[cfg(target_family = "wasm")]
+            #[cfg(feature = "mugon")]
             ServerTransports::Mugon => {
                 let transport_config = server::ServerTransport::Mugon;
                 build_server_netcode_config(
@@ -438,7 +438,7 @@ pub fn get_client_net_config(settings: &Settings, client_id: u64) -> client::Net
                 certificate_digest: certificate_digest.to_string().replace(":", ""),
             },
         ),
-        #[cfg(target_family = "wasm")]
+        #[cfg(feature = "mugon")]
         ClientTransports::Mugon => build_client_netcode_config(
             client_id,
             server_addr,

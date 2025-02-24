@@ -1,4 +1,4 @@
-#![cfg(target_family = "wasm")]
+#![cfg(feature = "mugon")]
 
 pub struct MugonServerBuilder {
     pub(crate) server_addr: SocketAddr,
