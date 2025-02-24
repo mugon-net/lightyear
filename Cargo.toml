@@ -150,6 +150,7 @@ web-sys = { version = "0.3", features = [
   "MessageEvent",
   "BinaryType",
 ] }
+js-sys = {version = "0.3"}
 
 # latest version that still uses bevy 0.14:
 bevy_web_keepalive = "0.3.4"

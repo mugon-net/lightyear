@@ -128,6 +128,7 @@ zstd = { workspace = true, optional = true }
 [target."cfg(target_family = \"wasm\")".dependencies]
 console_error_panic_hook.workspace = true
 web-sys = { workspace = true, optional = true }
+js-sys = { workspace = true, optional = true }
 bevy_web_keepalive.workspace = true
 futures-lite = { workspace = true, optional = true }
 getrandom.workspace = true

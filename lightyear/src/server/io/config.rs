@@ -37,7 +37,7 @@ pub enum ServerTransport {
         certificate: Identity,
     },
     #[cfg(target_family = "wasm")]
-    Mugon,
+    Mugon(SocketAddr),
     /// Use [`WebSocket`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket) as a transport
     #[cfg(all(feature = "websocket", not(target_family = "wasm")))]
     WebSocketServer { server_addr: SocketAddr },
@@ -71,7 +71,7 @@ impl Clone for ServerTransport {
                 certificate: __self_1.clone_identity(),
             },
             #[cfg(target_family = "wasm")]
-            ServerTransport::Mugon => ServerTransport::Mugon,
+            ServerTransport::Mugon(addr) => ServerTransport::Mugon(Clone::clone(addr)),
             #[cfg(all(feature = "websocket", not(target_family = "wasm")))]
             ServerTransport::WebSocketServer {
                 server_addr: __self_0,
@@ -107,7 +107,7 @@ impl ServerTransport {
                 })
             }
             #[cfg(target_family = "wasm")]
-            ServerTransport::Mugon => ServerTransportBuilderEnum::Mugon(MugonServerBuilder {}),
+            ServerTransport::Mugon(addr) => ServerTransportBuilderEnum::Mugon(MugonServerBuilder { server_addr: addr }),
             ServerTransport::Channels { channels } => {
                 ServerTransportBuilderEnum::Channels(Channels::new(channels))
             }

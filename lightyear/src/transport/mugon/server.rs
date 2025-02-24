@@ -17,15 +17,17 @@ use bevy::tasks::{futures_lite, IoTaskPool};
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener};
 use std::sync::{Arc, Mutex};
+use js_sys::Promise;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, error, info};
 use wasm_bindgen::prelude::wasm_bindgen;
+use wasm_bindgen_futures::JsFuture;
 
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = acceptMugonSocketConnection)]
-    async fn accept_new_connection() -> Option<u64>;
+    fn accept_new_connection() -> Promise; // Option<u64>
 
     #[wasm_bindgen(js_namespace = window, js_name = sendFromMugonSocket)]
     fn send(to_id: u64, value: &[u8]);
@@ -34,7 +36,7 @@ extern "C" {
     fn close(id: u64);
 
     #[wasm_bindgen(js_namespace = window, js_name = receiveFromMugonSocket)]
-    async fn receive(from_id: u64) -> Option<(Vec<u8>, bool)>;
+    fn receive(from_id: u64) -> Promise; // Option<(Vec<u8>, bool)>
 }
 
 type ClientBoundTxMap = Arc<Mutex<HashMap<SocketAddr, UnboundedSender<Message>>>>;
@@ -94,7 +96,8 @@ impl ServerTransportBuilder for MugonServerBuilder {
                                 _ => {}
                             }
                         }
-                        Ok(id) = accept_new_connection() => {
+                        Ok(js_value) = JsFuture::from(accept_new_connection()).await => {
+                            let id = u64::from(js_value);
                             let clientbound_tx_map = clientbound_tx_map.clone();
                             let serverbound_tx = serverbound_tx.clone();
                             let task = IoTaskPool::get().spawn(Compat::new(
@@ -162,15 +165,17 @@ impl MugonServerSocket {
             close(socket_addr_to_id(&addr));
         });
         let serverbound_handle = IoTaskPool::get().spawn(async move {
-            while let Some((data, closed)) = receive(socket_addr_to_id(&addr)).await {
-                let msg = if closed {
-                    Message::Close
-                } else {
-                    Message::Binary(data)
-                };
-                serverbound_tx
-                    .send((addr, msg))
-                    .unwrap_or_else(|e| error!("receive mugon socket error: {:?}", e));
+            while let Ok(js_value) = JsFuture::from(receive(socket_addr_to_id(&addr))).await {
+                if let Some((data, closed)) = Into::<Option<(Vec<u8>, bool)>>::into(js_value) {
+                    let msg = if closed {
+                        Message::Close
+                    } else {
+                        Message::Binary(data)
+                    };
+                    serverbound_tx
+                        .send((addr, msg))
+                        .unwrap_or_else(|e| error!("receive mugon socket error: {:?}", e));
+                }
             }
         });
         let _closed = futures_lite::future::race(clientbound_handle, serverbound_handle).await;
