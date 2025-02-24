@@ -1,18 +1,44 @@
 #![cfg(feature = "mugon")]
 
 use crate::client::io::transport::{ClientTransportBuilder, ClientTransportEnum};
-use crate::client::io::{ClientIoEventReceiver, ClientNetworkEventSender};
+use crate::client::io::{ClientIoEvent, ClientIoEventReceiver, ClientNetworkEventSender};
 use crate::transport::error::{Error, Result};
 use crate::transport::io::IoState;
+use crate::transport::mugon::common::socket_addr_to_id;
 use crate::transport::{
     BoxedReceiver, BoxedSender, PacketReceiver, PacketSender, Transport, LOCAL_SOCKET, MTU,
 };
+use async_compat::Compat;
+use bevy::tasks::IoTaskPool;
+use js_sys::Promise;
 use std::net::SocketAddr;
+use std::rc::Rc;
+use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::oneshot::{Receiver, Sender};
+use tracing::{debug, info};
+use wasm_bindgen::prelude::wasm_bindgen;
+use wasm_bindgen_futures::JsFuture;
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = window, js_name = conenctToMugonSocket)]
+    fn connect() -> Promise; // bool
+
+    #[wasm_bindgen(js_namespace = window, js_name = closeMugonSocket)]
+    fn close(id: u64);
+
+    #[wasm_bindgen(js_namespace = window, js_name = sendFromMugonSocket)]
+    fn send(to_id: u64, value: &[u8]) -> bool;
+
+    #[wasm_bindgen(js_namespace = window, js_name = receiveFromMugonSocket)]
+    fn receive(from_id: u64) -> Promise; // Option<(Vec<u8>, bool)>
+}
 
 pub(crate) struct MugonClientSocketBuilder {
     pub(crate) server_addr: SocketAddr,
+    pub(crate) local_addr: SocketAddr,
 }
 
 impl ClientTransportBuilder for MugonClientSocketBuilder {
@@ -24,7 +50,101 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
         Option<ClientIoEventReceiver>,
         Option<ClientNetworkEventSender>,
     )> {
-        todo!()
+        // TODO: This can exhaust all available memory unless there is some other way to limit the amount of in-flight data in place
+        let (to_server_sender, mut to_server_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (from_server_sender, from_server_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
+        // channels used to cancel the task
+        let (close_tx, close_rx) = async_channel::bounded(1);
+        // channels used to check the status of the io task
+        let (status_tx, status_rx) = async_channel::bounded(1);
+
+        let local_id = socket_addr_to_id(&self.local_addr);
+        let server_id = socket_addr_to_id(&self.server_addr);
+
+        let (send0, recv0) = tokio::sync::oneshot::channel::<bool>();
+        let (send1, recv1) = tokio::sync::oneshot::channel::<bool>();
+
+        IoTaskPool::get()
+            .spawn(Compat::new(async move {
+                info!("Starting client mugon client task");
+                if let Ok(js_value) = JsFuture::from(connect()).await {
+                    if let Some(connected) = js_value.as_bool() {
+                        if connected {
+                            status_tx.send(ClientIoEvent::Connected).await?;
+                        }
+
+                        let _ = send0.send(connected);
+                        let _ = send1.send(connected);
+                    } else {
+                        let _ = send0.send(false);
+                        let _ = send1.send(false);
+                    }
+                }
+            }))
+            .detach();
+
+        IoTaskPool::get()
+            .spawn(Compat::new(async move {
+                loop {
+                    tokio::select! {
+                        Ok(event) = close_rx.recv() => {
+                            match event {
+                                ClientIoEvent::Disconnected(e) => {
+                                    debug!("Stopping mugon io task. Reason: {:?}", e);
+                                    drop(addr_to_task);
+                                    return;
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(js_value) = JsFuture::from(receive(local_id)).await {
+                            if let Some((data, closed)) = Into::<Option<(Vec<u8>, bool)>>::into(js_value) {
+                                if closed {
+                                    let _ = status_tx.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was closed by the server or lost").into())).await;
+                                    // return;
+                                } else {
+                                    from_server_sender.send(data);
+                                };
+                            }
+                        }
+                    }
+                }
+            }))
+            .detach();
+        IoTaskPool::get()
+            .spawn(Compat::new(async move {
+                loop {
+                    tokio::select! {
+                        recv = to_server_receiver.recv() => {
+                            if let Some(msg) = recv {
+                                if !send(server_id, msg.as_slice()) {
+                                    let _ = status_tx.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was lost").into())).await;
+                                    return;
+                                }
+                            } else {
+                                return;
+                            }
+                        }
+                    }
+                }
+            }))
+            .detach();
+
+        let sender = MugonClientSocketSender {
+            serverbound_tx: to_server_sender,
+        };
+        let receiver = MugonClientSocketReceiver {
+            server_addr: self.server_addr,
+            clientbound_rx: from_server_receiver,
+            buffer: [0; MTU],
+        };
+
+        Ok((
+            ClientTransportEnum::Mugon(MugonClientSocket { receiver, sender }),
+            IoState::Connecting,
+            Some(ClientIoEventReceiver(status_rx)),
+            Some(ClientNetworkEventSender(close_tx)),
+        ))
     }
 }
 

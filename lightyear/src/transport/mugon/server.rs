@@ -14,10 +14,10 @@ use crate::transport::mugon::common::{id_to_socket_addr, socket_addr_to_id};
 use crate::transport::{BoxedReceiver, BoxedSender, PacketReceiver, PacketSender, Transport, MTU};
 use async_compat::Compat;
 use bevy::tasks::{futures_lite, IoTaskPool};
+use js_sys::Promise;
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener};
 use std::sync::{Arc, Mutex};
-use js_sys::Promise;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, error, info};
@@ -30,7 +30,7 @@ extern "C" {
     fn accept_new_connection() -> Promise; // Option<u64>
 
     #[wasm_bindgen(js_namespace = window, js_name = sendFromMugonSocket)]
-    fn send(to_id: u64, value: &[u8]);
+    fn send(to_id: u64, value: &[u8]) -> bool;
 
     #[wasm_bindgen(js_namespace = window, js_name = closeMugonSocket)]
     fn close(id: u64);
@@ -155,7 +155,10 @@ impl MugonServerSocket {
             while let Some(msg) = clientbound_rx.recv().await {
                 match msg {
                     Message::Binary(data) => {
-                        send(socket_addr_to_id(&addr), &*data);
+                        if !send(socket_addr_to_id(&addr), &*data) {
+                            info!("Connection with {} lost", addr);
+                            return;
+                        }
                     }
                     Message::Close => {
                         close(socket_addr_to_id(&addr));
