@@ -1,4 +1,5 @@
 use crate::transport::{PacketReceiver, PacketSender, MTU};
+use serde::Deserialize;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 
 pub fn socket_addr_to_id(socket_addr: &SocketAddr) -> u64 {
@@ -10,4 +11,10 @@ pub fn socket_addr_to_id(socket_addr: &SocketAddr) -> u64 {
 
 pub fn id_to_socket_addr(id: u64) -> SocketAddr {
     SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::from(id as u128), 0, 0, 0))
+}
+
+#[derive(Deserialize)]
+pub struct ReceiveResponse {
+    pub data: Vec<u8>,
+    pub closed: bool,
 }

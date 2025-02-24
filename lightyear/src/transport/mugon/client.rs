@@ -4,13 +4,14 @@ use crate::client::io::transport::{ClientTransportBuilder, ClientTransportEnum};
 use crate::client::io::{ClientIoEvent, ClientIoEventReceiver, ClientNetworkEventSender};
 use crate::transport::error::{Error, Result};
 use crate::transport::io::IoState;
-use crate::transport::mugon::common::socket_addr_to_id;
+use crate::transport::mugon::common::{socket_addr_to_id, ReceiveResponse};
 use crate::transport::{
     BoxedReceiver, BoxedSender, PacketReceiver, PacketSender, Transport, LOCAL_SOCKET, MTU,
 };
 use async_compat::Compat;
 use bevy::tasks::IoTaskPool;
 use js_sys::Promise;
+use serde_wasm_bindgen::from_value;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use tokio::sync::mpsc;
@@ -97,13 +98,13 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                             }
                         }
                         Ok(js_value) = JsFuture::from(receive(local_id)).await => {
-                            if let Some((data, closed)) = Into::<Option<(Vec<u8>, bool)>>::into(js_value) {
-                                if closed {
+                             if let Ok(response) = from_value::<ReceiveResponse>(js_value) {
+                                if response.closed {
                                     let _ = status_tx.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was closed by the server or lost").into())).await;
                                     debug!("Stopping mugon io task. Connection was dropped");
                                     return;
                                 } else {
-                                    let _ = from_server_sender.send(data);
+                                    let _ = from_server_sender.send(response.data);
                                 };
                             }
                         }

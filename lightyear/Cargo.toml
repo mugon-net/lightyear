@@ -16,19 +16,19 @@ publish = true
 [features]
 trace = []
 metrics = [
-  "dep:metrics",
-  "dep:metrics-util",
-  "dep:metrics-tracing-context",
-  "dep:metrics-exporter-prometheus",
+    "dep:metrics",
+    "dep:metrics-util",
+    "dep:metrics-tracing-context",
+    "dep:metrics-exporter-prometheus",
 ]
 visualizer = ["dep:bevy_metrics_dashboard", "metrics"]
 mock_time = ["dep:mock_instant"]
 webtransport = [
-  "dep:wtransport",
-  "dep:xwt-core",
-  "dep:xwt-web",
-  "dep:web-sys",
-  "dep:wasm-bindgen-futures",
+    "dep:wtransport",
+    "dep:xwt-core",
+    "dep:xwt-web",
+    "dep:web-sys",
+    "dep:wasm-bindgen-futures",
 ]
 leafwing = ["dep:leafwing-input-manager"]
 # NOTE: because lightyear doesn't enable any features of avian by default, your crate must
@@ -36,14 +36,14 @@ leafwing = ["dep:leafwing-input-manager"]
 avian2d = ["dep:avian2d"]
 avian3d = ["dep:avian3d", "avian3d/3d"]
 websocket = [
-  "dep:tokio-tungstenite",
-  "dep:futures-util",
-  "dep:web-sys",
-  "dep:wasm-bindgen",
-  "dep:wasm-bindgen-futures",
+    "dep:tokio-tungstenite",
+    "dep:futures-util",
+    "dep:web-sys",
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
 ]
 steam = ["dep:steamworks"]
-mugon = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys"]
+mugon = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys", "dep:serde-wasm-bindgen"]
 track_change_detection = ["bevy/track_change_detection"]
 
 # compression
@@ -137,6 +137,7 @@ xwt-core = { workspace = true, optional = true }
 xwt-web = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }
 wasm-bindgen-futures = { workspace = true, optional = true }
+serde-wasm-bindgen = { workspace = true, optional = true }
 zstd = { workspace = true, optional = true, features = ["wasm"] }
 
 

@@ -10,11 +10,12 @@ use crate::server::io::transport::{ServerTransportBuilder, ServerTransportEnum};
 use crate::server::io::{ServerIoEvent, ServerIoEventReceiver, ServerNetworkEventSender};
 use crate::transport::error::Error;
 use crate::transport::io::IoState;
-use crate::transport::mugon::common::{id_to_socket_addr, socket_addr_to_id};
+use crate::transport::mugon::common::{id_to_socket_addr, socket_addr_to_id, ReceiveResponse};
 use crate::transport::{BoxedReceiver, BoxedSender, PacketReceiver, PacketSender, Transport, MTU};
 use async_compat::Compat;
 use bevy::tasks::{futures_lite, IoTaskPool};
 use js_sys::Promise;
+use serde_wasm_bindgen::from_value;
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener};
 use std::sync::{Arc, Mutex};
@@ -22,6 +23,7 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, error, info};
 use wasm_bindgen::prelude::wasm_bindgen;
+use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;
 
 #[wasm_bindgen]
@@ -169,11 +171,14 @@ impl MugonServerSocket {
         });
         let serverbound_handle = IoTaskPool::get().spawn(async move {
             while let Ok(js_value) = JsFuture::from(receive(socket_addr_to_id(&addr))).await {
-                if let Some((data, closed)) = Into::<Option<(Vec<u8>, bool)>>::into(js_value) {
-                    let msg = if closed {
+                if js_value.is_null() {
+                    continue;
+                }
+                if let Ok(response) = from_value::<ReceiveResponse>(js_value) {
+                    let msg = if response.closed {
                         Message::Close
                     } else {
-                        Message::Binary(data)
+                        Message::Binary(response.data)
                     };
                     serverbound_tx
                         .send((addr, msg))
