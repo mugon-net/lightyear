@@ -99,7 +99,7 @@ impl ServerTransportBuilder for MugonServerBuilder {
                             }
                         }
                         Ok(js_value) = JsFuture::from(accept_new_connection()) => {
-                            let id = u64::from(js_value);
+                            let id = js_value.as_f64().unwrap() as u64;
                             let clientbound_tx_map = clientbound_tx_map.clone();
                             let serverbound_tx = serverbound_tx.clone();
                             let task = IoTaskPool::get().spawn(Compat::new(

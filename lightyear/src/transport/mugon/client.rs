@@ -59,6 +59,10 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
         // channels used to check the status of the io task
         let (status_tx, status_rx) = async_channel::bounded(1);
 
+        let status_tx_clone_0 = status_tx.clone();
+        let status_tx_clone_1 = status_tx.clone();
+        let status_tx_clone_2 = status_tx.clone();
+
         let local_id = socket_addr_to_id(&self.local_addr);
         let server_id = socket_addr_to_id(&self.server_addr);
 
@@ -71,7 +75,10 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                 if let Ok(js_value) = JsFuture::from(connect()).await {
                     if let Some(connected) = js_value.as_bool() {
                         if connected {
-                            status_tx.send(ClientIoEvent::Connected).await.unwrap();
+                            status_tx_clone_0
+                                .send(ClientIoEvent::Connected)
+                                .await
+                                .unwrap();
                         }
 
                         let _ = send0.send(connected);
@@ -100,7 +107,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                         Ok(js_value) = JsFuture::from(receive(local_id)) => {
                              if let Ok(response) = from_value::<ReceiveResponse>(js_value) {
                                 if response.closed {
-                                    let _ = status_tx.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was closed by the server or lost").into())).await;
+                                    let _ = status_tx_clone_1.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was closed by the server or lost").into())).await;
                                     debug!("Stopping mugon io task. Connection was dropped");
                                     return;
                                 } else {
@@ -119,7 +126,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                         recv = to_server_receiver.recv() => {
                             if let Some(msg) = recv {
                                 if !send(server_id, msg.as_slice()) {
-                                    let _ = status_tx.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was lost").into())).await;
+                                    let _ = status_tx_clone_2.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was lost").into())).await;
                                     return;
                                 }
                             } else {
