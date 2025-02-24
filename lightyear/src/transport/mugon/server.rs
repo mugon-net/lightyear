@@ -98,7 +98,7 @@ impl ServerTransportBuilder for MugonServerBuilder {
                                 _ => {}
                             }
                         }
-                        Ok(js_value) = JsFuture::from(accept_new_connection()).await => {
+                        Ok(js_value) = JsFuture::from(accept_new_connection()) => {
                             let id = u64::from(js_value);
                             let clientbound_tx_map = clientbound_tx_map.clone();
                             let serverbound_tx = serverbound_tx.clone();

@@ -97,7 +97,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                                 _ => {}
                             }
                         }
-                        Ok(js_value) = JsFuture::from(receive(local_id)).await => {
+                        Ok(js_value) = JsFuture::from(receive(local_id)) => {
                              if let Ok(response) = from_value::<ReceiveResponse>(js_value) {
                                 if response.closed {
                                     let _ = status_tx.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was closed by the server or lost").into())).await;
