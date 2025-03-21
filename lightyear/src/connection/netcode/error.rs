@@ -15,6 +15,8 @@ pub enum Error {
     ClientNotConnected,
     #[error("clock went backwards (did you invent a time machine?): {0}")]
     SystemTime(#[from] std::time::SystemTimeError),
+    #[error("clock went backwards (did you invent a time machine?): {0}")]
+    WebTime(bevy::utils::SystemTimeError),
     #[error("invalid connect token: {0}")]
     InvalidToken(super::token::InvalidTokenError),
     #[error(transparent)]

@@ -1,9 +1,8 @@
+use bevy::prelude::Resource;
+use bevy::utils::SystemTime;
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use bevy::prelude::Resource;
 use tracing::{debug, error, trace, warn};
 
 #[cfg(feature = "trace")]
@@ -350,7 +349,7 @@ impl<Ctx> ServerConfig<Ctx> {
 /// ```
 /// # use crate::lightyear::connection::netcode::{generate_key, NetcodeServer};
 /// # use std::net::{SocketAddr, Ipv4Addr};
-/// # use bevy::utils::{Instant, Duration};
+/// # use bevy::utils::{Instant, Duration, SystemTime};
 /// # use std::thread;
 /// # use lightyear::prelude::server::{IoConfig, ServerTransport};
 /// let mut io = IoConfig::from_transport(ServerTransport::UdpSocket(
@@ -802,7 +801,10 @@ impl<Ctx> NetcodeServer<Ctx> {
         sender: &mut impl PacketSender,
         receiver: &mut impl PacketReceiver,
     ) -> Result<()> {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_err(|e| Error::WebTime(e))?
+            .as_secs();
         while let Some((buf, addr)) = receiver.recv().map_err(Error::from)? {
             self.recv_packet(buf, now, addr, sender)?;
         }

@@ -24,7 +24,7 @@ use wasm_bindgen_futures::JsFuture;
 
 #[wasm_bindgen]
 extern "C" {
-    #[wasm_bindgen(js_namespace = window, js_name = conenctToMugonSocket)]
+    #[wasm_bindgen(js_namespace = window, js_name = connectToMugonSocket)]
     fn connect() -> Promise; // bool
 
     #[wasm_bindgen(js_namespace = window, js_name = closeMugonSocket)]
