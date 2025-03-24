@@ -59,9 +59,10 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
         // channels used to check the status of the io task
         let (status_tx, status_rx) = async_channel::bounded(1);
 
+        let close_rx_clone_0 = close_rx.clone();
+
         let status_tx_clone_0 = status_tx.clone();
         let status_tx_clone_1 = status_tx.clone();
-        let status_tx_clone_2 = status_tx.clone();
 
         let local_id = socket_addr_to_id(&self.local_addr);
         let server_id = socket_addr_to_id(&self.server_addr);
@@ -69,74 +70,108 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
         let (send0, recv0) = tokio::sync::oneshot::channel::<bool>();
         let (send1, recv1) = tokio::sync::oneshot::channel::<bool>();
 
-        IoTaskPool::get()
-            .spawn(Compat::new(async move {
-                info!("Starting client mugon client task");
-                if let Ok(js_value) = JsFuture::from(connect()).await {
-                    if let Some(connected) = js_value.as_bool() {
-                        if connected {
-                            status_tx_clone_0
-                                .send(ClientIoEvent::Connected)
-                                .await
-                                .unwrap();
-                        }
-
-                        let _ = send0.send(connected);
-                        let _ = send1.send(connected);
-                    } else {
-                        let _ = send0.send(false);
-                        let _ = send1.send(false);
+        // Calling connect js function and creating events notifying other tasks of result
+        wasm_bindgen_futures::spawn_local(async move {
+            info!("Starting mugon client connect task");
+            if let Ok(js_value) = JsFuture::from(connect()).await {
+                if let Some(connected) = js_value.as_bool() {
+                    if connected {
+                        status_tx.send(ClientIoEvent::Connected).await.unwrap();
                     }
-                }
-            }))
-            .detach();
 
-        IoTaskPool::get()
-            .spawn(Compat::new(async move {
-                loop {
-                    tokio::select! {
-                        Ok(event) = close_rx.recv() => {
-                            match event {
-                                ClientIoEvent::Disconnected(e) => {
-                                    debug!("Stopping mugon io task. Reason: {:?}", e);
-                                    return;
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(js_value) = JsFuture::from(receive(local_id)) => {
-                             if let Ok(response) = from_value::<ReceiveResponse>(js_value) {
-                                if response.closed {
-                                    let _ = status_tx_clone_1.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was closed by the server or lost").into())).await;
-                                    debug!("Stopping mugon io task. Connection was dropped");
-                                    return;
-                                } else {
-                                    let _ = from_server_sender.send(response.data);
-                                };
-                            }
-                        }
-                    }
+                    let _ = send0.send(connected);
+                    let _ = send1.send(connected);
+                } else {
+                    let _ = send0.send(false);
+                    let _ = send1.send(false);
                 }
-            }))
-            .detach();
-        IoTaskPool::get()
-            .spawn(Compat::new(async move {
-                loop {
-                    tokio::select! {
-                        recv = to_server_receiver.recv() => {
-                            if let Some(msg) = recv {
-                                if !send(server_id, msg.as_slice()) {
-                                    let _ = status_tx_clone_2.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was lost").into())).await;
-                                    return;
-                                }
-                            } else {
+                info!("Connected.");
+            } else {
+                info!("Failed to establish connection.");
+            }
+        });
+        // Listening for incoming packets or the close signal from other tasks
+        wasm_bindgen_futures::spawn_local(async move {
+            tokio::select! {
+                Ok(_) = recv0 => {
+                    info!("Starting mugon client receive task");
+                },
+                Ok(event) = close_rx.recv() => {
+                        match event {
+                            ClientIoEvent::Disconnected(e) => {
+                                debug!("Stopping mugon client receive task. Reason: {:?}", e);
                                 return;
                             }
+                            _ => {}
+                        }
+                    }
+            }
+            loop {
+                tokio::select! {
+                    Ok(event) = close_rx.recv() => {
+                        match event {
+                            ClientIoEvent::Disconnected(e) => {
+                                debug!("Stopping mugon client receive task. Reason: {:?}", e);
+                                return;
+                            }
+                            _ => {}
+                        }
+                    },
+                    Ok(js_value) = JsFuture::from(receive(local_id)) => {
+                         if let Ok(response) = from_value::<ReceiveResponse>(js_value) {
+                            if response.closed {
+                                let _ = status_tx_clone_0.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was closed by the server or lost").into())).await;
+                                debug!("Stopping mugon client receive task. Connection was dropped");
+                                return;
+                            } else {
+                                let _ = from_server_sender.send(response.data);
+                            };
                         }
                     }
                 }
-            }))
-            .detach();
+            }
+        });
+
+        // Sending outgoing packets
+        wasm_bindgen_futures::spawn_local(async move {
+            tokio::select! {
+                Ok(_) = recv1 => {
+                    info!("Starting mugon client send task");
+                },
+                Ok(event) = close_rx_clone_0.recv() => {
+                        match event {
+                            ClientIoEvent::Disconnected(e) => {
+                                debug!("Stopping mugon receive task. Reason: {:?}", e);
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
+            }
+            loop {
+                tokio::select! {
+                    Ok(event) = close_rx_clone_0.recv() => {
+                        match event {
+                            ClientIoEvent::Disconnected(e) => {
+                                debug!("Stopping mugon client send task. Reason: {:?}", e);
+                                return;
+                            }
+                            _ => {}
+                        }
+                    },
+                    recv = to_server_receiver.recv() => {
+                        if let Some(msg) = recv {
+                            if !send(server_id, msg.as_slice()) {
+                                let _ = status_tx_clone_1.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was lost").into())).await;
+                                return;
+                            }
+                        } else {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
 
         let sender = MugonClientSocketSender {
             serverbound_tx: to_server_sender,

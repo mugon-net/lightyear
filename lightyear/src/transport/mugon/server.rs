@@ -12,8 +12,7 @@ use crate::transport::error::Error;
 use crate::transport::io::IoState;
 use crate::transport::mugon::common::{id_to_socket_addr, socket_addr_to_id, ReceiveResponse};
 use crate::transport::{BoxedReceiver, BoxedSender, PacketReceiver, PacketSender, Transport, MTU};
-use async_compat::Compat;
-use bevy::tasks::{futures_lite, IoTaskPool};
+use bevy::tasks::{futures_lite, IoTaskPool, Task};
 use js_sys::Promise;
 use serde_wasm_bindgen::from_value;
 use std::collections::HashMap;
@@ -60,10 +59,10 @@ impl ServerTransportBuilder for MugonServerBuilder {
         let (serverbound_tx, serverbound_rx) = unbounded_channel::<(SocketAddr, Message)>();
         let clientbound_tx_map = ClientBoundTxMap::new(Mutex::new(HashMap::new()));
         // channels used to cancel the task
-        let (close_tx, close_rx) = async_channel::unbounded();
+        let (close_tx, close_rx) = async_channel::unbounded::<ServerIoEvent>();
         // channels used to check the status of the io task
         let (status_tx, status_rx) = async_channel::unbounded();
-        let addr_to_task = Arc::new(Mutex::new(HashMap::new()));
+        let addr_to_task = Arc::new(Mutex::new(HashMap::<SocketAddr, Task<()>>::new()));
 
         let sender = MugonServerSocketSender {
             server_addr: self.server_addr,
@@ -74,43 +73,43 @@ impl ServerTransportBuilder for MugonServerBuilder {
             server_addr: self.server_addr,
             serverbound_rx,
         };
-        IoTaskPool::get()
-            .spawn(Compat::new(async move {
-                info!("Starting mugon server task");
-                status_tx
-                    .send(ServerIoEvent::ServerConnected)
-                    .await
-                    .unwrap();
-                loop {
-                    tokio::select! {
-                        Ok(event) = close_rx.recv() => {
-                            match event {
-                                ServerIoEvent::ServerDisconnected(e) => {
-                                    debug!("Stopping mugon io task. Reason: {:?}", e);
-                                    drop(addr_to_task);
-                                    return;
-                                }
-                                ServerIoEvent::ClientDisconnected(addr) => {
-                                    debug!("Stopping mugon io task associated with address: {:?} because we received a disconnection signal from netcode", addr);
-                                    addr_to_task.lock().unwrap().remove(&addr);
-                                    clientbound_tx_map.lock().unwrap().remove(&addr);
-                                }
-                                _ => {}
+
+        // Accepting new client connections
+        IoTaskPool::get().spawn(async move {
+            info!("Starting mugon server client acceptor task");
+            status_tx
+                .send(ServerIoEvent::ServerConnected)
+                .await
+                .unwrap();
+            loop {
+                tokio::select! {
+                    Ok(event) = close_rx.recv() => {
+                        match event {
+                            ServerIoEvent::ServerDisconnected(e) => {
+                                debug!("Stopping mugon io task. Reason: {:?}", e);
+                                drop(addr_to_task);
+                                return;
                             }
-                        }
-                        Ok(js_value) = JsFuture::from(accept_new_connection()) => {
-                            let id = js_value.as_f64().unwrap() as u64;
-                            let clientbound_tx_map = clientbound_tx_map.clone();
-                            let serverbound_tx = serverbound_tx.clone();
-                            let task = IoTaskPool::get().spawn(Compat::new(
-                                MugonServerSocket::handle_client(id_to_socket_addr(id), serverbound_tx, clientbound_tx_map, status_tx.clone())
-                            ));
-                            addr_to_task.lock().unwrap().insert(id_to_socket_addr(id), task);
+                            ServerIoEvent::ClientDisconnected(addr) => {
+                                debug!("Stopping mugon io task associated with address: {:?} because we received a disconnection signal from netcode", addr);
+                                addr_to_task.lock().unwrap().remove(&addr);
+                                clientbound_tx_map.lock().unwrap().remove(&addr);
+                            }
+                            _ => {}
                         }
                     }
+                    Ok(js_value) = JsFuture::from(accept_new_connection()) => {
+                        let id = js_value.as_f64().unwrap() as u64;
+                        let clientbound_tx_map = clientbound_tx_map.clone();
+                        let serverbound_tx = serverbound_tx.clone();
+                        let task = IoTaskPool::get().spawn(
+                            MugonServerSocket::handle_client(id_to_socket_addr(id), serverbound_tx, clientbound_tx_map, status_tx.clone())
+                        );
+                        addr_to_task.lock().unwrap().insert(id_to_socket_addr(id), task);
+                    }
                 }
-            }))
-            .detach();
+            }
+        });
         Ok((
             ServerTransportEnum::Mugon(MugonServerSocket {
                 local_addr: self.server_addr,
@@ -242,7 +241,6 @@ impl PacketReceiver for MugonServerSocketReceiver {
                     info!("Mugon connection closed");
                     Ok(None)
                 }
-                _ => Ok(None),
             },
             Err(e) => {
                 if e == TryRecvError::Empty {
