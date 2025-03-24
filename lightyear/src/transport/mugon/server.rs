@@ -156,6 +156,11 @@ impl MugonServerSocket {
             while let Some(msg) = clientbound_rx.recv().await {
                 match msg {
                     Message::Binary(data) => {
+                        /*info!(
+                            "Server sending to id {} message: {:?}",
+                            socket_addr_to_id(&addr),
+                            data
+                        );*/
                         if !send(socket_addr_to_id(&addr), &*data) {
                             debug!("Connection with {} lost", addr);
                             return;
@@ -177,6 +182,11 @@ impl MugonServerSocket {
                     let msg = if response.closed {
                         Message::Close
                     } else {
+                        /*info!(
+                            "Server Received from id {} message: {:?}",
+                            socket_addr_to_id(&addr),
+                            response.data
+                        );*/
                         Message::Binary(response.data)
                     };
                     serverbound_tx

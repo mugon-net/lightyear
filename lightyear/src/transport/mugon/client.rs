@@ -124,6 +124,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                                 debug!("Stopping mugon client receive task. Connection was dropped");
                                 return;
                             } else {
+                                // info!("Client Received from id {} message: {:?}",server_id,response.data);
                                 let _ = from_server_sender.send(response.data);
                             };
                         }
@@ -161,6 +162,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                     },
                     recv = to_server_receiver.recv() => {
                         if let Some(msg) = recv {
+                            // info!("Client sending to id {} message: {:?}", server_id, msg);
                             if !send(server_id, msg.as_slice()) {
                                 let _ = status_tx_clone_1.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was lost").into())).await;
                                 return;
