@@ -72,7 +72,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
 
         // Calling connect js function and creating events notifying other tasks of result
         wasm_bindgen_futures::spawn_local(async move {
-            info!("Starting mugon client connect task");
+            debug!("Starting mugon client connect task");
             if let Ok(js_value) = JsFuture::from(connect()).await {
                 if let Some(connected) = js_value.as_bool() {
                     if connected {
@@ -85,16 +85,16 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                     let _ = send0.send(false);
                     let _ = send1.send(false);
                 }
-                info!("Connected.");
+                debug!("Connected.");
             } else {
-                info!("Failed to establish connection.");
+                debug!("Failed to establish connection.");
             }
         });
         // Listening for incoming packets or the close signal from other tasks
         wasm_bindgen_futures::spawn_local(async move {
             tokio::select! {
                 Ok(_) = recv0 => {
-                    info!("Starting mugon client receive task");
+                    debug!("Starting mugon client receive task");
                 },
                 Ok(event) = close_rx.recv() => {
                         match event {
@@ -136,7 +136,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
         wasm_bindgen_futures::spawn_local(async move {
             tokio::select! {
                 Ok(_) = recv1 => {
-                    info!("Starting mugon client send task");
+                    debug!("Starting mugon client send task");
                 },
                 Ok(event) = close_rx_clone_0.recv() => {
                         match event {

@@ -76,7 +76,7 @@ impl ServerTransportBuilder for MugonServerBuilder {
 
         // Accepting new client connections
         IoTaskPool::get().spawn(async move {
-            info!("Starting mugon server client acceptor task");
+            debug!("Starting mugon server client acceptor task");
             status_tx
                 .send(ServerIoEvent::ServerConnected)
                 .await
@@ -146,7 +146,7 @@ impl MugonServerSocket {
         clientbound_tx_map: Arc<Mutex<HashMap<SocketAddr, UnboundedSender<Message>>>>,
         status_tx: async_channel::Sender<ServerIoEvent>,
     ) {
-        info!("New MugonSocket connection: {}", addr);
+        debug!("New MugonSocket connection: {}", addr);
         let (clientbound_tx, mut clientbound_rx) = unbounded_channel::<Message>();
         clientbound_tx_map
             .lock()
@@ -157,7 +157,7 @@ impl MugonServerSocket {
                 match msg {
                     Message::Binary(data) => {
                         if !send(socket_addr_to_id(&addr), &*data) {
-                            info!("Connection with {} lost", addr);
+                            debug!("Connection with {} lost", addr);
                             return;
                         }
                     }
@@ -186,7 +186,7 @@ impl MugonServerSocket {
             }
         });
         let _closed = futures_lite::future::race(clientbound_handle, serverbound_handle).await;
-        info!("Connection with {} closed", addr);
+        debug!("Connection with {} closed", addr);
         clientbound_tx_map.lock().unwrap().remove(&addr);
         // notify netcode that the io task got disconnected
         let _ = status_tx
@@ -238,7 +238,7 @@ impl PacketReceiver for MugonServerSocketReceiver {
                     Ok(Some((&mut self.buffer[..buf.len()], addr)))
                 }
                 Message::Close => {
-                    info!("Mugon connection closed");
+                    debug!("Mugon connection closed");
                     Ok(None)
                 }
             },
