@@ -34,7 +34,7 @@ extern "C" {
     fn send(to_id: u64, value: &[u8]) -> bool;
 
     #[wasm_bindgen(js_namespace = window, js_name = receiveFromMugonSocket)]
-    fn receive(from_id: u64) -> Promise; // Option<(Vec<u8>, bool)>
+    fn receive(from_id: u64) -> Promise; // (Vec<u8>, bool)
 }
 
 pub(crate) struct MugonClientSocketBuilder {
@@ -117,7 +117,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                             _ => {}
                         }
                     },
-                    Ok(js_value) = JsFuture::from(receive(local_id)) => {
+                    Ok(js_value) = JsFuture::from(receive(server_id)) => {
                          if let Ok(response) = from_value::<ReceiveResponse>(js_value) {
                             if response.closed {
                                 let _ = status_tx_clone_0.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was closed by the server or lost").into())).await;

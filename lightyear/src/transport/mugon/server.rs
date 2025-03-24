@@ -28,7 +28,7 @@ use wasm_bindgen_futures::JsFuture;
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = acceptMugonSocketConnection)]
-    fn accept_new_connection() -> Promise; // Option<u64>
+    fn accept_new_connection() -> Promise; // u64
 
     #[wasm_bindgen(js_namespace = window, js_name = sendFromMugonSocket)]
     fn send(to_id: u64, value: &[u8]) -> bool;
@@ -37,7 +37,7 @@ extern "C" {
     fn close(id: u64);
 
     #[wasm_bindgen(js_namespace = window, js_name = receiveFromMugonSocket)]
-    fn receive(from_id: u64) -> Promise; // Option<(Vec<u8>, bool)>
+    fn receive(from_id: u64) -> Promise; // (Vec<u8>, bool)
 }
 
 type ClientBoundTxMap = Arc<Mutex<HashMap<SocketAddr, UnboundedSender<Message>>>>;
