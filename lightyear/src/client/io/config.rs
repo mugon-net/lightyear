@@ -14,8 +14,6 @@ use crate::transport::middleware::conditioner::LinkConditioner;
 use crate::transport::middleware::PacketReceiverWrapper;
 #[cfg(feature = "mugon")]
 use crate::transport::mugon::client::MugonClientSocketBuilder;
-#[cfg(feature = "mugon")]
-use crate::transport::mugon::server::MugonServerSocket;
 #[cfg(not(target_family = "wasm"))]
 use crate::transport::udp::UdpSocketBuilder;
 #[cfg(feature = "websocket")]
