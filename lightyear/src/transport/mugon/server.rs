@@ -4,25 +4,25 @@ pub struct MugonServerBuilder {
     pub(crate) server_addr: SocketAddr,
 }
 
-use super::super::error::Result;
+use super::super::error::Result as LightyearResult;
 use crate::client::io::transport::ClientTransportBuilder;
 use crate::server::io::transport::{ServerTransportBuilder, ServerTransportEnum};
 use crate::server::io::{ServerIoEvent, ServerIoEventReceiver, ServerNetworkEventSender};
 use crate::transport::error::Error;
 use crate::transport::io::IoState;
-use crate::transport::mugon::common::{id_to_socket_addr, socket_addr_to_id, ReceiveResponse};
+use crate::transport::mugon::common::{id_to_socket_addr, socket_addr_to_id};
 use crate::transport::{BoxedReceiver, BoxedSender, PacketReceiver, PacketSender, Transport, MTU};
 use bevy::tasks::{futures_lite, IoTaskPool, Task};
-use js_sys::Promise;
+use js_sys::{Promise, Uint8Array};
 use serde_wasm_bindgen::from_value;
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use wasm_bindgen::prelude::wasm_bindgen;
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
 #[wasm_bindgen]
@@ -50,7 +50,7 @@ enum Message {
 impl ServerTransportBuilder for MugonServerBuilder {
     fn start(
         self,
-    ) -> Result<(
+    ) -> LightyearResult<(
         ServerTransportEnum,
         IoState,
         Option<ServerIoEventReceiver>,
@@ -165,6 +165,7 @@ impl MugonServerSocket {
                             debug!("Connection with {} lost", addr);
                             return;
                         }
+                        drop(data);
                     }
                     Message::Close => {
                         close(socket_addr_to_id(&addr));
@@ -175,24 +176,18 @@ impl MugonServerSocket {
         });
         let serverbound_handle = IoTaskPool::get().spawn(async move {
             while let Ok(js_value) = JsFuture::from(receive(socket_addr_to_id(&addr))).await {
-                if js_value.is_null() {
-                    continue;
-                }
-                if let Ok(response) = from_value::<ReceiveResponse>(js_value) {
-                    let msg = if response.closed {
-                        Message::Close
-                    } else {
-                        /*info!(
-                            "Server Received from id {} message: {:?}",
-                            socket_addr_to_id(&addr),
-                            response.data
-                        );*/
-                        Message::Binary(response.data)
-                    };
-                    serverbound_tx
-                        .send((addr, msg))
-                        .unwrap_or_else(|e| error!("receive mugon socket error: {:?}", e));
-                }
+                let msg = if js_value.is_null() || js_value.is_undefined() {
+                    Message::Close
+                } else if let Some(uint8_array) = js_value.dyn_ref::<Uint8Array>() {
+                    let data: Vec<u8> = uint8_array.to_vec();
+                    Message::Binary(data)
+                } else {
+                    warn!("Received unexpected JS value: {:?}", js_value);
+                    Message::Close
+                };
+                serverbound_tx
+                    .send((addr, msg))
+                    .unwrap_or_else(|e| error!("receive mugon socket error: {:?}", e));
             }
         });
         let _closed = futures_lite::future::race(clientbound_handle, serverbound_handle).await;
@@ -212,7 +207,7 @@ struct MugonServerSocketSender {
 }
 
 impl PacketSender for MugonServerSocketSender {
-    fn send(&mut self, payload: &[u8], address: &SocketAddr) -> Result<()> {
+    fn send(&mut self, payload: &[u8], address: &SocketAddr) -> LightyearResult<()> {
         if let Some(clientbound_tx) = self.addr_to_clientbound_tx.lock().unwrap().get(address) {
             clientbound_tx
                 .send(Message::Binary(payload.to_vec()))
@@ -240,7 +235,7 @@ struct MugonServerSocketReceiver {
 }
 
 impl PacketReceiver for MugonServerSocketReceiver {
-    fn recv(&mut self) -> Result<Option<(&mut [u8], SocketAddr)>> {
+    fn recv(&mut self) -> LightyearResult<Option<(&mut [u8], SocketAddr)>> {
         match self.serverbound_rx.try_recv() {
             Ok((addr, msg)) => match msg {
                 Message::Binary(buf) => {

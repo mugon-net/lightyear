@@ -2,15 +2,15 @@
 
 use crate::client::io::transport::{ClientTransportBuilder, ClientTransportEnum};
 use crate::client::io::{ClientIoEvent, ClientIoEventReceiver, ClientNetworkEventSender};
-use crate::transport::error::{Error, Result};
+use crate::transport::error::{Error, Result as LightyearResult};
 use crate::transport::io::IoState;
-use crate::transport::mugon::common::{socket_addr_to_id, ReceiveResponse};
+use crate::transport::mugon::common::socket_addr_to_id;
 use crate::transport::{
     BoxedReceiver, BoxedSender, PacketReceiver, PacketSender, Transport, LOCAL_SOCKET, MTU,
 };
 use async_compat::Compat;
 use bevy::tasks::IoTaskPool;
-use js_sys::Promise;
+use js_sys::{Promise, Uint8Array};
 use serde_wasm_bindgen::from_value;
 use std::net::SocketAddr;
 use std::rc::Rc;
@@ -18,8 +18,9 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::{Receiver, Sender};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use wasm_bindgen::prelude::wasm_bindgen;
+use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
 #[wasm_bindgen]
@@ -45,7 +46,7 @@ pub(crate) struct MugonClientSocketBuilder {
 impl ClientTransportBuilder for MugonClientSocketBuilder {
     fn connect(
         self,
-    ) -> Result<(
+    ) -> LightyearResult<(
         ClientTransportEnum,
         IoState,
         Option<ClientIoEventReceiver>,
@@ -118,16 +119,19 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                         }
                     },
                     Ok(js_value) = JsFuture::from(receive(server_id)) => {
-                         if let Ok(response) = from_value::<ReceiveResponse>(js_value) {
-                            if response.closed {
-                                let _ = status_tx_clone_0.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was closed by the server or lost").into())).await;
-                                debug!("Stopping mugon client receive task. Connection was dropped");
-                                return;
-                            } else {
-                                // info!("Client Received from id {} message: {:?}",server_id,response.data);
-                                let _ = from_server_sender.send(response.data);
-                            };
-                        }
+                        if js_value.is_null() || js_value.is_undefined() {
+                            let _ = status_tx_clone_0.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was closed by the server or lost").into())).await;
+                            debug!("Stopping mugon client receive task. Connection was dropped");
+                            return;
+                        } else if let Some(uint8_array) = js_value.dyn_ref::<Uint8Array>() {
+                            let data: Vec<u8> = uint8_array.to_vec();
+                            // info!("Client Received from id {} message: {:?}",server_id,response.data);
+                            let _ = from_server_sender.send(data);
+                        } else {
+                            let _ = status_tx_clone_0.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was closed by the server or lost").into())).await;
+                            warn!("Received unexpected JS value: {:?}", js_value);
+                            return;
+                        };
                     }
                 }
             }
@@ -165,6 +169,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                             // info!("Client sending to id {} message: {:?}", server_id, msg);
                             if !send(server_id, msg.as_slice()) {
                                 let _ = status_tx_clone_1.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was lost").into())).await;
+                                drop(msg);
                                 return;
                             }
                         } else {
@@ -213,7 +218,7 @@ struct MugonClientSocketSender {
 }
 
 impl PacketSender for MugonClientSocketSender {
-    fn send(&mut self, payload: &[u8], address: &SocketAddr) -> Result<()> {
+    fn send(&mut self, payload: &[u8], address: &SocketAddr) -> LightyearResult<()> {
         self.serverbound_tx.send(payload.to_vec()).map_err(|e| {
             std::io::Error::other(format!("unable to send message to server: {:?}", e)).into()
         })
@@ -227,7 +232,7 @@ struct MugonClientSocketReceiver {
 }
 
 impl PacketReceiver for MugonClientSocketReceiver {
-    fn recv(&mut self) -> Result<Option<(&mut [u8], SocketAddr)>> {
+    fn recv(&mut self) -> LightyearResult<Option<(&mut [u8], SocketAddr)>> {
         match self.clientbound_rx.try_recv() {
             Ok(msg) => {
                 self.buffer[..msg.len()].copy_from_slice(&msg);
