@@ -13,8 +13,7 @@ use crate::transport::io::IoState;
 use crate::transport::mugon::common::{id_to_socket_addr, socket_addr_to_id};
 use crate::transport::{BoxedReceiver, BoxedSender, PacketReceiver, PacketSender, Transport, MTU};
 use bevy::tasks::{futures_lite, IoTaskPool, Task};
-use js_sys::{Promise, Uint8Array};
-use serde_wasm_bindgen::from_value;
+use js_sys::Uint8Array;
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener};
 use std::sync::{Arc, Mutex};
@@ -76,6 +75,8 @@ impl ServerTransportBuilder for MugonServerBuilder {
             server_addr: self.server_addr,
             serverbound_rx,
         };
+
+        status_tx.try_send(ServerIoEvent::ServerConnected)?;
 
         let new_connection_callback: Closure<dyn FnMut(u64)> = Closure::new(move |id: u64| {
             let clientbound_tx_map = clientbound_tx_map.clone();
@@ -147,31 +148,23 @@ impl MugonServerSocket {
             .lock()
             .unwrap()
             .insert(addr, clientbound_tx);
-        let clientbound_handle = IoTaskPool::get().spawn(async move {
-            while let Some(msg) = clientbound_rx.recv().await {
-                match msg {
-                    Message::Binary(data) => {
-                        /*info!(
-                            "Server sending to id {} message: {:?}",
-                            socket_addr_to_id(&addr),
-                            data
-                        );*/
-                        debug!("Server sending");
-                        if !send(socket_addr_to_id(&addr), &*data) {
-                            debug!("Connection with {} lost", addr);
-                            return;
-                        }
-                        debug!("Server sent");
-                        drop(data);
+        while let Some(msg) = clientbound_rx.recv().await {
+            match msg {
+                Message::Binary(data) => {
+                    debug!("Server sending");
+                    if !send(socket_addr_to_id(&addr), &*data) {
+                        debug!("Connection with {} lost", addr);
+                        return;
                     }
-                    Message::Close => {
-                        close(socket_addr_to_id(&addr));
-                    }
+                    debug!("Server sent");
+                }
+                Message::Close => {
+                    debug!("Server close received");
+                    close(socket_addr_to_id(&addr));
                 }
             }
-            close(socket_addr_to_id(&addr));
-        });
-        let _closed = clientbound_handle.await;
+        }
+        close(socket_addr_to_id(&addr));
         debug!("Connection with {} closed", addr);
         clientbound_tx_map.lock().unwrap().remove(&addr);
         // notify netcode that the io task got disconnected
@@ -189,6 +182,7 @@ struct MugonServerSocketSender {
 
 impl PacketSender for MugonServerSocketSender {
     fn send(&mut self, payload: &[u8], address: &SocketAddr) -> LightyearResult<()> {
+        debug!("Mugon Server Packet Sender send");
         if let Some(clientbound_tx) = self.addr_to_clientbound_tx.lock().unwrap().get(address) {
             clientbound_tx
                 .send(Message::Binary(payload.to_vec()))
@@ -217,9 +211,11 @@ struct MugonServerSocketReceiver {
 
 impl PacketReceiver for MugonServerSocketReceiver {
     fn recv(&mut self) -> LightyearResult<Option<(&mut [u8], SocketAddr)>> {
+        debug!("Mugon Server Packet Receiver recv");
         match self.serverbound_rx.try_recv() {
             Ok((addr, msg)) => match msg {
                 Message::Binary(buf) => {
+                    debug!("Mugon Server Packet Receiver received");
                     self.buffer[..buf.len()].copy_from_slice(&buf);
                     Ok(Some((&mut self.buffer[..buf.len()], addr)))
                 }

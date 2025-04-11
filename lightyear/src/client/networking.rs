@@ -211,6 +211,7 @@ pub(crate) fn send(
             error!("Error sending packet: {}", e);
         });
     }
+    trace!("Sent packets to server");
 
     // no need to clear the connection, because we already std::mem::take it
     // client.connection.clear();

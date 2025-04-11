@@ -11,8 +11,6 @@ use crate::transport::{
 };
 use async_compat::Compat;
 use bevy::tasks::IoTaskPool;
-use js_sys::{Promise, Uint8Array};
-use serde_wasm_bindgen::from_value;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use tokio::sync::mpsc;
@@ -57,41 +55,40 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
         let (from_server_sender, from_server_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
 
         // channel used to cancel the io task and check if it was cancelled
-        let (close_tx, close_rx) = async_channel::bounded(1);
+        let (close_tx, close_rx) = async_channel::unbounded();
         let close_rx_for_send_task = close_rx.clone();
 
         // channel used to send/check the status of the io task
-        let (status_tx_from_connect_task, status_rx) = async_channel::bounded(1);
+        let (status_tx_from_connect_task, status_rx) = async_channel::unbounded();
         let status_tx_from_send_task = status_tx_from_connect_task.clone();
 
         // channel used to signal from the connect task to the send task, if the connection init was successful
-        let (send_connected_event, recv_connected_event) = async_channel::bounded(1);
+        let (send_connected_event, recv_connected_event) = async_channel::unbounded();
 
         let local_id = socket_addr_to_id(&self.local_addr);
         let server_id = socket_addr_to_id(&self.server_addr);
 
         let connected_callback: Closure<dyn FnMut(bool)> = Closure::new(move |success: bool| {
+            info!("connected_callback");
             let status_tx_from_connect_task = status_tx_from_connect_task.clone();
             let send_connected_event = send_connected_event.clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                if success {
-                    status_tx_from_connect_task
-                        .send(ClientIoEvent::Connected)
-                        .await
-                        .unwrap();
-                    send_connected_event.send(success).await.unwrap();
-                } else {
-                    status_tx_from_connect_task
-                        .send(ClientIoEvent::Disconnected(NotConnected))
-                        .await
-                        .unwrap();
-                    send_connected_event.send(success).await.unwrap();
-                }
-            });
+            info!("connected_callback A");
+            if success {
+                status_tx_from_connect_task
+                    .try_send(ClientIoEvent::Connected)
+                    .unwrap();
+                send_connected_event.try_send(success).unwrap();
+            } else {
+                status_tx_from_connect_task
+                    .try_send(ClientIoEvent::Disconnected(NotConnected))
+                    .unwrap();
+                send_connected_event.try_send(success).unwrap();
+            }
+            info!("connected_callback B");
         });
         let receive_callback: Closure<dyn FnMut(u64, Vec<u8>)> =
             Closure::new(move |_: u64, data: Vec<u8>| {
-                let _ = from_server_sender.send(data);
+                let _ = from_server_sender.send(data).unwrap();
             });
 
         connect_and_register_callbacks(
@@ -128,6 +125,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                 debug!("Client waiting for send");
                 tokio::select! {
                     Ok(event) = close_rx_for_send_task.recv() => {
+                        debug!("Client close received");
                         match event {
                             ClientIoEvent::Disconnected(e) => {
                                 debug!("Stopping mugon client send task. Reason: {:?}", e);
@@ -141,11 +139,10 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                             // info!("Client sending to id {} message: {:?}", server_id, msg);
                             debug!("Client sending");
                             if !send(server_id, msg.as_slice()) {
-                                let _ = status_tx_from_send_task.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was lost").into())).await;
+                                let _ = status_tx_from_send_task.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was lost").into())).await.unwrap();
                                 return;
                             }
                             debug!("Client sent");
-                            drop(msg);
                         } else {
                             return;
                         }
@@ -165,8 +162,8 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
 
         Ok((
             ClientTransportEnum::Mugon(MugonClientSocket { receiver, sender }),
-            IoState::Connecting,
-            Some(ClientIoEventReceiver(status_rx)),
+            IoState::Connected,
+            None,
             Some(ClientNetworkEventSender(close_tx)),
         ))
     }
@@ -193,6 +190,7 @@ struct MugonClientSocketSender {
 
 impl PacketSender for MugonClientSocketSender {
     fn send(&mut self, payload: &[u8], address: &SocketAddr) -> LightyearResult<()> {
+        debug!("Mugon Client Packet Sender send");
         self.serverbound_tx.send(payload.to_vec()).map_err(|e| {
             std::io::Error::other(format!("unable to send message to server: {:?}", e)).into()
         })
@@ -207,8 +205,10 @@ struct MugonClientSocketReceiver {
 
 impl PacketReceiver for MugonClientSocketReceiver {
     fn recv(&mut self) -> LightyearResult<Option<(&mut [u8], SocketAddr)>> {
+        debug!("Mugon Client Packet Receiver recv");
         match self.clientbound_rx.try_recv() {
             Ok(msg) => {
+                debug!("Mugon Client Packet Receiver received");
                 self.buffer[..msg.len()].copy_from_slice(&msg);
                 Ok(Some((&mut self.buffer[..msg.len()], self.server_addr)))
             }

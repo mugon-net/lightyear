@@ -337,6 +337,7 @@ impl<Ctx> NetcodeClient<Ctx> {
             }
             _ => return Ok(()),
         };
+        trace!("client send packets");
         self.send_packet(packet, io)
     }
     fn connect_to_next_server(&mut self) -> std::result::Result<(), ()> {
@@ -552,7 +553,9 @@ impl<Ctx> NetcodeClient<Ctx> {
         self.time += delta_ms;
         self.recv_packets(io)?;
         self.send_packets(io)?;
+        trace!("client sent packets");
         self.update_state();
+        trace!("client updated state");
         Ok(())
     }
 
@@ -604,6 +607,7 @@ impl<Ctx> NetcodeClient<Ctx> {
         if buf.len() > MAX_PACKET_SIZE {
             return Err(Error::SizeMismatch(MAX_PACKET_SIZE, buf.len()));
         }
+        trace!("client send packet");
         self.send_packet(PayloadPacket::create(buf), io)?;
         Ok(())
     }
@@ -708,6 +712,7 @@ pub(crate) mod connection {
         fn send(&mut self, buf: &[u8]) -> Result<(), ConnectionError> {
             let io = self.io.as_mut().ok_or(ConnectionError::IoNotInitialized)?;
             self.client.send(buf, io)?;
+            trace!("client sent packet");
             Ok(())
         }
 
