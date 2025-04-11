@@ -108,6 +108,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                     }
             }
             loop {
+                debug!("Client waiting for receive");
                 tokio::select! {
                     Ok(event) = close_rx.recv() => {
                         match event {
@@ -119,14 +120,18 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                         }
                     },
                     Ok(js_value) = JsFuture::from(receive(server_id)) => {
+                        debug!("Client Received");
                         if js_value.is_null() || js_value.is_undefined() {
                             let _ = status_tx_clone_0.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was closed by the server or lost").into())).await;
                             debug!("Stopping mugon client receive task. Connection was dropped");
                             return;
                         } else if let Some(uint8_array) = js_value.dyn_ref::<Uint8Array>() {
+                            debug!("Client A");
                             let data: Vec<u8> = uint8_array.to_vec();
+                            debug!("Client B");
                             // info!("Client Received from id {} message: {:?}",server_id,response.data);
                             let _ = from_server_sender.send(data);
+                            debug!("Client C");
                         } else {
                             let _ = status_tx_clone_0.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was closed by the server or lost").into())).await;
                             warn!("Received unexpected JS value: {:?}", js_value);
@@ -154,6 +159,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                     }
             }
             loop {
+                debug!("Client waiting for send");
                 tokio::select! {
                     Ok(event) = close_rx_clone_0.recv() => {
                         match event {
@@ -167,11 +173,13 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                     recv = to_server_receiver.recv() => {
                         if let Some(msg) = recv {
                             // info!("Client sending to id {} message: {:?}", server_id, msg);
+                            debug!("Client sending");
                             if !send(server_id, msg.as_slice()) {
                                 let _ = status_tx_clone_1.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was lost").into())).await;
-                                drop(msg);
                                 return;
                             }
+                            debug!("Client sent");
+                            drop(msg);
                         } else {
                             return;
                         }

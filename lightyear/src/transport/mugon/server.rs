@@ -161,10 +161,12 @@ impl MugonServerSocket {
                             socket_addr_to_id(&addr),
                             data
                         );*/
+                        debug!("Server sending");
                         if !send(socket_addr_to_id(&addr), &*data) {
                             debug!("Connection with {} lost", addr);
                             return;
                         }
+                        debug!("Server sent");
                         drop(data);
                     }
                     Message::Close => {
@@ -176,15 +178,19 @@ impl MugonServerSocket {
         });
         let serverbound_handle = IoTaskPool::get().spawn(async move {
             while let Ok(js_value) = JsFuture::from(receive(socket_addr_to_id(&addr))).await {
+                debug!("Server received");
                 let msg = if js_value.is_null() || js_value.is_undefined() {
                     Message::Close
                 } else if let Some(uint8_array) = js_value.dyn_ref::<Uint8Array>() {
+                    debug!("Server A");
                     let data: Vec<u8> = uint8_array.to_vec();
+                    debug!("Server B");
                     Message::Binary(data)
                 } else {
                     warn!("Received unexpected JS value: {:?}", js_value);
                     Message::Close
                 };
+                debug!("Server C");
                 serverbound_tx
                     .send((addr, msg))
                     .unwrap_or_else(|e| error!("receive mugon socket error: {:?}", e));
