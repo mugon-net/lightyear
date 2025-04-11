@@ -21,23 +21,22 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, error, info, warn};
+use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
 #[wasm_bindgen]
 extern "C" {
-    #[wasm_bindgen(js_namespace = window, js_name = acceptMugonSocketConnection)]
-    fn accept_new_connection() -> Promise; // u64
+    // TODO Also disconnect / status callback?
+    #[wasm_bindgen(js_namespace = window, js_name = hostAndRegisterCallbacks)]
+    fn host_and_register_callbacks(new_connection_callback: &JsValue, receive_callback: &JsValue);
 
     #[wasm_bindgen(js_namespace = window, js_name = sendFromMugonSocket)]
     fn send(to_id: u64, value: &[u8]) -> bool;
 
     #[wasm_bindgen(js_namespace = window, js_name = closeMugonSocket)]
     fn close(id: u64);
-
-    #[wasm_bindgen(js_namespace = window, js_name = receiveFromMugonSocket)]
-    fn receive(from_id: u64) -> Promise; // (Vec<u8>, bool)
 }
 
 type ClientBoundTxMap = Arc<Mutex<HashMap<SocketAddr, UnboundedSender<Message>>>>;
@@ -56,12 +55,16 @@ impl ServerTransportBuilder for MugonServerBuilder {
         Option<ServerIoEventReceiver>,
         Option<ServerNetworkEventSender>,
     )> {
+        // channels used to pass messages from/to the rest of the lightyear framework
         let (serverbound_tx, serverbound_rx) = unbounded_channel::<(SocketAddr, Message)>();
         let clientbound_tx_map = ClientBoundTxMap::new(Mutex::new(HashMap::new()));
-        // channels used to cancel the task
+
+        // channel used to cancel the io task and check if it was cancelled
         let (close_tx, close_rx) = async_channel::unbounded::<ServerIoEvent>();
-        // channels used to check the status of the io task
+
+        // channel used to send/check the status of the io task
         let (status_tx, status_rx) = async_channel::unbounded();
+
         let addr_to_task = Arc::new(Mutex::new(HashMap::<SocketAddr, Task<()>>::new()));
 
         let sender = MugonServerSocketSender {
@@ -74,42 +77,34 @@ impl ServerTransportBuilder for MugonServerBuilder {
             serverbound_rx,
         };
 
-        // Accepting new client connections
-        IoTaskPool::get().spawn(async move {
-            debug!("Starting mugon server client acceptor task");
-            status_tx
-                .send(ServerIoEvent::ServerConnected)
-                .await
-                .unwrap();
-            loop {
-                tokio::select! {
-                    Ok(event) = close_rx.recv() => {
-                        match event {
-                            ServerIoEvent::ServerDisconnected(e) => {
-                                debug!("Stopping mugon io task. Reason: {:?}", e);
-                                drop(addr_to_task);
-                                return;
-                            }
-                            ServerIoEvent::ClientDisconnected(addr) => {
-                                debug!("Stopping mugon io task associated with address: {:?} because we received a disconnection signal from netcode", addr);
-                                addr_to_task.lock().unwrap().remove(&addr);
-                                clientbound_tx_map.lock().unwrap().remove(&addr);
-                            }
-                            _ => {}
-                        }
-                    }
-                    Ok(js_value) = JsFuture::from(accept_new_connection()) => {
-                        let id = js_value.as_f64().unwrap() as u64;
-                        let clientbound_tx_map = clientbound_tx_map.clone();
-                        let serverbound_tx = serverbound_tx.clone();
-                        let task = IoTaskPool::get().spawn(
-                            MugonServerSocket::handle_client(id_to_socket_addr(id), serverbound_tx, clientbound_tx_map, status_tx.clone())
-                        );
-                        addr_to_task.lock().unwrap().insert(id_to_socket_addr(id), task);
-                    }
-                }
-            }
-        });
+        let new_connection_callback = Closure::wrap(Box::new(move |id: u64| {
+            let clientbound_tx_map = clientbound_tx_map.clone();
+            let task = IoTaskPool::get().spawn(MugonServerSocket::handle_client(
+                id_to_socket_addr(id),
+                clientbound_tx_map,
+                status_tx.clone(),
+            ));
+            addr_to_task
+                .lock()
+                .unwrap()
+                .insert(id_to_socket_addr(id), task);
+        }));
+        let receive_callback = Closure::wrap(Box::new(move |client_id: u64, data: Vec<u8>| {
+            let addr = id_to_socket_addr(client_id);
+            serverbound_tx
+                .send((addr, Message::Binary(data)))
+                .unwrap_or_else(|e| error!("receive mugon socket error: {:?}", e));
+        })) as Box<dyn FnMut(u64, Vec<u8>)>;
+
+        host_and_register_callbacks(
+            &new_connection_callback.as_ref().unchecked_ref(),
+            &receive_callback.as_ref().unchecked_ref(),
+        );
+
+        // Leaking closures to js, so they continue to function after connect call has returned
+        new_connection_callback.forget();
+        receive_callback.forget();
+
         Ok((
             ServerTransportEnum::Mugon(MugonServerSocket {
                 local_addr: self.server_addr,
@@ -142,7 +137,6 @@ impl Transport for MugonServerSocket {
 impl MugonServerSocket {
     async fn handle_client(
         addr: SocketAddr,
-        serverbound_tx: UnboundedSender<(SocketAddr, Message)>,
         clientbound_tx_map: Arc<Mutex<HashMap<SocketAddr, UnboundedSender<Message>>>>,
         status_tx: async_channel::Sender<ServerIoEvent>,
     ) {
@@ -176,27 +170,7 @@ impl MugonServerSocket {
             }
             close(socket_addr_to_id(&addr));
         });
-        let serverbound_handle = IoTaskPool::get().spawn(async move {
-            while let Ok(js_value) = JsFuture::from(receive(socket_addr_to_id(&addr))).await {
-                debug!("Server received");
-                let msg = if js_value.is_null() || js_value.is_undefined() {
-                    Message::Close
-                } else if let Some(uint8_array) = js_value.dyn_ref::<Uint8Array>() {
-                    debug!("Server A");
-                    let data: Vec<u8> = uint8_array.to_vec();
-                    debug!("Server B");
-                    Message::Binary(data)
-                } else {
-                    warn!("Received unexpected JS value: {:?}", js_value);
-                    Message::Close
-                };
-                debug!("Server C");
-                serverbound_tx
-                    .send((addr, msg))
-                    .unwrap_or_else(|e| error!("receive mugon socket error: {:?}", e));
-            }
-        });
-        let _closed = futures_lite::future::race(clientbound_handle, serverbound_handle).await;
+        let _closed = clientbound_handle.await;
         debug!("Connection with {} closed", addr);
         clientbound_tx_map.lock().unwrap().remove(&addr);
         // notify netcode that the io task got disconnected

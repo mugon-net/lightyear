@@ -2,6 +2,7 @@
 
 use crate::client::io::transport::{ClientTransportBuilder, ClientTransportEnum};
 use crate::client::io::{ClientIoEvent, ClientIoEventReceiver, ClientNetworkEventSender};
+use crate::transport::error::Error::NotConnected;
 use crate::transport::error::{Error, Result as LightyearResult};
 use crate::transport::io::IoState;
 use crate::transport::mugon::common::socket_addr_to_id;
@@ -19,23 +20,21 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::{Receiver, Sender};
 use tracing::{debug, info, warn};
-use wasm_bindgen::prelude::wasm_bindgen;
+use wasm_bindgen::prelude::{wasm_bindgen, Closure};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
 #[wasm_bindgen]
 extern "C" {
-    #[wasm_bindgen(js_namespace = window, js_name = connectToMugonSocket)]
-    fn connect() -> Promise; // bool
-
-    #[wasm_bindgen(js_namespace = window, js_name = closeMugonSocket)]
-    fn close(id: u64);
+    // TODO Also disconnect / status callback?
+    #[wasm_bindgen(js_namespace = window, js_name = connectAndRegisterCallbacks)]
+    fn connect_and_register_callbacks(connected_callback: &JsValue, receive_callback: &JsValue);
 
     #[wasm_bindgen(js_namespace = window, js_name = sendFromMugonSocket)]
     fn send(to_id: u64, value: &[u8]) -> bool;
 
-    #[wasm_bindgen(js_namespace = window, js_name = receiveFromMugonSocket)]
-    fn receive(from_id: u64) -> Promise; // (Vec<u8>, bool)
+    #[wasm_bindgen(js_namespace = window, js_name = closeMugonSocket)]
+    fn close(id: u64);
 }
 
 pub(crate) struct MugonClientSocketBuilder {
@@ -52,103 +51,65 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
         Option<ClientIoEventReceiver>,
         Option<ClientNetworkEventSender>,
     )> {
+        // channels used to pass messages from/to the rest of the lightyear framework
         // TODO: This can exhaust all available memory unless there is some other way to limit the amount of in-flight data in place
         let (to_server_sender, mut to_server_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
         let (from_server_sender, from_server_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
-        // channels used to cancel the task
+
+        // channel used to cancel the io task and check if it was cancelled
         let (close_tx, close_rx) = async_channel::bounded(1);
-        // channels used to check the status of the io task
-        let (status_tx, status_rx) = async_channel::bounded(1);
+        let close_rx_for_send_task = close_rx.clone();
 
-        let close_rx_clone_0 = close_rx.clone();
+        // channel used to send/check the status of the io task
+        let (status_tx_from_connect_task, status_rx) = async_channel::bounded(1);
+        let status_tx_from_send_task = status_tx_from_connect_task.clone();
 
-        let status_tx_clone_0 = status_tx.clone();
-        let status_tx_clone_1 = status_tx.clone();
+        // channel used to signal from the connect task to the send task, if the connection init was successful
+        let (send_connected_event, recv_connected_event) = tokio::sync::oneshot::channel::<bool>();
 
         let local_id = socket_addr_to_id(&self.local_addr);
         let server_id = socket_addr_to_id(&self.server_addr);
 
-        let (send0, recv0) = tokio::sync::oneshot::channel::<bool>();
-        let (send1, recv1) = tokio::sync::oneshot::channel::<bool>();
-
-        // Calling connect js function and creating events notifying other tasks of result
-        wasm_bindgen_futures::spawn_local(async move {
-            debug!("Starting mugon client connect task");
-            if let Ok(js_value) = JsFuture::from(connect()).await {
-                if let Some(connected) = js_value.as_bool() {
-                    if connected {
-                        status_tx.send(ClientIoEvent::Connected).await.unwrap();
-                    }
-
-                    let _ = send0.send(connected);
-                    let _ = send1.send(connected);
-                } else {
-                    let _ = send0.send(false);
-                    let _ = send1.send(false);
-                }
-                debug!("Connected.");
+        let connected_callback = Closure::wrap(Box::new(move |success: bool| async {
+            if success {
+                status_tx_from_connect_task
+                    .send(ClientIoEvent::Connected)
+                    .await
+                    .unwrap();
+                send_connected_event.send(true).unwrap();
             } else {
-                debug!("Failed to establish connection.");
+                status_tx_from_connect_task
+                    .send(ClientIoEvent::Disconnected(NotConnected))
+                    .await
+                    .unwrap();
+                send_connected_event.send(false).unwrap();
             }
-        });
-        // Listening for incoming packets or the close signal from other tasks
-        wasm_bindgen_futures::spawn_local(async move {
-            tokio::select! {
-                Ok(_) = recv0 => {
-                    debug!("Starting mugon client receive task");
-                },
-                Ok(event) = close_rx.recv() => {
-                        match event {
-                            ClientIoEvent::Disconnected(e) => {
-                                debug!("Stopping mugon client receive task. Reason: {:?}", e);
-                                return;
-                            }
-                            _ => {}
-                        }
-                    }
-            }
-            loop {
-                debug!("Client waiting for receive");
-                tokio::select! {
-                    Ok(event) = close_rx.recv() => {
-                        match event {
-                            ClientIoEvent::Disconnected(e) => {
-                                debug!("Stopping mugon client receive task. Reason: {:?}", e);
-                                return;
-                            }
-                            _ => {}
-                        }
-                    },
-                    Ok(js_value) = JsFuture::from(receive(server_id)) => {
-                        debug!("Client Received");
-                        if js_value.is_null() || js_value.is_undefined() {
-                            let _ = status_tx_clone_0.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was closed by the server or lost").into())).await;
-                            debug!("Stopping mugon client receive task. Connection was dropped");
-                            return;
-                        } else if let Some(uint8_array) = js_value.dyn_ref::<Uint8Array>() {
-                            debug!("Client A");
-                            let data: Vec<u8> = uint8_array.to_vec();
-                            debug!("Client B");
-                            // info!("Client Received from id {} message: {:?}",server_id,response.data);
-                            let _ = from_server_sender.send(data);
-                            debug!("Client C");
-                        } else {
-                            let _ = status_tx_clone_0.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was closed by the server or lost").into())).await;
-                            warn!("Received unexpected JS value: {:?}", js_value);
-                            return;
-                        };
-                    }
-                }
-            }
-        });
+        }));
+        let receive_callback = Closure::wrap(Box::new(move |_: u64, data: Vec<u8>| {
+            let _ = from_server_sender.send(data);
+        })) as Box<dyn FnMut(u64, Vec<u8>)>;
 
-        // Sending outgoing packets
+        connect_and_register_callbacks(
+            &connected_callback.as_ref().unchecked_ref(),
+            &receive_callback.as_ref().unchecked_ref(),
+        );
+
+        // Leaking closures to js, so they continue to function after connect call has returned
+        connected_callback.forget();
+        receive_callback.forget();
+
+        // Task for sending outgoing packets
         wasm_bindgen_futures::spawn_local(async move {
             tokio::select! {
-                Ok(_) = recv1 => {
-                    debug!("Starting mugon client send task");
+                Ok(success) = recv_connected_event => {
+                    if success {
+                        debug!("Starting mugon client send task");
+                    } else {
+                        debug!("Stopping mugon receive task. Reason: Mugon client failed to connect");
+                        return;
+                    }
                 },
-                Ok(event) = close_rx_clone_0.recv() => {
+                Ok(event) = close_rx_for_send_task.recv() => {
                         match event {
                             ClientIoEvent::Disconnected(e) => {
                                 debug!("Stopping mugon receive task. Reason: {:?}", e);
@@ -161,7 +122,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
             loop {
                 debug!("Client waiting for send");
                 tokio::select! {
-                    Ok(event) = close_rx_clone_0.recv() => {
+                    Ok(event) = close_rx_for_send_task.recv() => {
                         match event {
                             ClientIoEvent::Disconnected(e) => {
                                 debug!("Stopping mugon client send task. Reason: {:?}", e);
@@ -175,7 +136,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                             // info!("Client sending to id {} message: {:?}", server_id, msg);
                             debug!("Client sending");
                             if !send(server_id, msg.as_slice()) {
-                                let _ = status_tx_clone_1.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was lost").into())).await;
+                                let _ = status_tx_from_send_task.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was lost").into())).await;
                                 return;
                             }
                             debug!("Client sent");
