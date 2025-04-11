@@ -65,29 +65,34 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
         let status_tx_from_send_task = status_tx_from_connect_task.clone();
 
         // channel used to signal from the connect task to the send task, if the connection init was successful
-        let (send_connected_event, recv_connected_event) = tokio::sync::oneshot::channel::<bool>();
+        let (send_connected_event, recv_connected_event) = async_channel::bounded(1);
 
         let local_id = socket_addr_to_id(&self.local_addr);
         let server_id = socket_addr_to_id(&self.server_addr);
 
-        let connected_callback = Closure::wrap(Box::new(move |success: bool| async {
-            if success {
-                status_tx_from_connect_task
-                    .send(ClientIoEvent::Connected)
-                    .await
-                    .unwrap();
-                send_connected_event.send(true).unwrap();
-            } else {
-                status_tx_from_connect_task
-                    .send(ClientIoEvent::Disconnected(NotConnected))
-                    .await
-                    .unwrap();
-                send_connected_event.send(false).unwrap();
-            }
-        }));
-        let receive_callback = Closure::wrap(Box::new(move |_: u64, data: Vec<u8>| {
-            let _ = from_server_sender.send(data);
-        })) as Box<dyn FnMut(u64, Vec<u8>)>;
+        let connected_callback: Closure<dyn FnMut(bool)> = Closure::new(move |success: bool| {
+            let status_tx_from_connect_task = status_tx_from_connect_task.clone();
+            let send_connected_event = send_connected_event.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if success {
+                    status_tx_from_connect_task
+                        .send(ClientIoEvent::Connected)
+                        .await
+                        .unwrap();
+                    send_connected_event.send(success).await.unwrap();
+                } else {
+                    status_tx_from_connect_task
+                        .send(ClientIoEvent::Disconnected(NotConnected))
+                        .await
+                        .unwrap();
+                    send_connected_event.send(success).await.unwrap();
+                }
+            });
+        });
+        let receive_callback: Closure<dyn FnMut(u64, Vec<u8>)> =
+            Closure::new(move |_: u64, data: Vec<u8>| {
+                let _ = from_server_sender.send(data);
+            });
 
         connect_and_register_callbacks(
             &connected_callback.as_ref().unchecked_ref(),
@@ -101,7 +106,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
         // Task for sending outgoing packets
         wasm_bindgen_futures::spawn_local(async move {
             tokio::select! {
-                Ok(success) = recv_connected_event => {
+                Ok(success) = recv_connected_event.recv() => {
                     if success {
                         debug!("Starting mugon client send task");
                     } else {

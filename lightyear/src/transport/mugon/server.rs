@@ -77,7 +77,7 @@ impl ServerTransportBuilder for MugonServerBuilder {
             serverbound_rx,
         };
 
-        let new_connection_callback = Closure::wrap(Box::new(move |id: u64| {
+        let new_connection_callback: Closure<dyn FnMut(u64)> = Closure::new(move |id: u64| {
             let clientbound_tx_map = clientbound_tx_map.clone();
             let task = IoTaskPool::get().spawn(MugonServerSocket::handle_client(
                 id_to_socket_addr(id),
@@ -88,13 +88,14 @@ impl ServerTransportBuilder for MugonServerBuilder {
                 .lock()
                 .unwrap()
                 .insert(id_to_socket_addr(id), task);
-        }));
-        let receive_callback = Closure::wrap(Box::new(move |client_id: u64, data: Vec<u8>| {
-            let addr = id_to_socket_addr(client_id);
-            serverbound_tx
-                .send((addr, Message::Binary(data)))
-                .unwrap_or_else(|e| error!("receive mugon socket error: {:?}", e));
-        })) as Box<dyn FnMut(u64, Vec<u8>)>;
+        });
+        let receive_callback: Closure<dyn FnMut(u64, Uint8Array)> =
+            Closure::new(move |client_id: u64, data: Uint8Array| {
+                let addr = id_to_socket_addr(client_id);
+                serverbound_tx
+                    .send((addr, Message::Binary(data.to_vec())))
+                    .unwrap_or_else(|e| error!("receive mugon socket error: {:?}", e));
+            });
 
         host_and_register_callbacks(
             &new_connection_callback.as_ref().unchecked_ref(),
