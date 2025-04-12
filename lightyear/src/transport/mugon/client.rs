@@ -13,6 +13,7 @@ use async_compat::Compat;
 use bevy::tasks::IoTaskPool;
 use std::net::SocketAddr;
 use std::rc::Rc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -20,7 +21,6 @@ use tokio::sync::oneshot::{Receiver, Sender};
 use tracing::{debug, info, warn};
 use wasm_bindgen::prelude::{wasm_bindgen, Closure};
 use wasm_bindgen::{JsCast, JsValue};
-use wasm_bindgen_futures::JsFuture;
 
 #[wasm_bindgen]
 extern "C" {
@@ -102,24 +102,30 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
 
         // Task for sending outgoing packets
         wasm_bindgen_futures::spawn_local(async move {
-            tokio::select! {
-                Ok(success) = recv_connected_event.recv() => {
-                    if success {
-                        debug!("Starting mugon client send task");
-                    } else {
-                        debug!("Stopping mugon receive task. Reason: Mugon client failed to connect");
-                        return;
-                    }
-                },
-                Ok(event) = close_rx_for_send_task.recv() => {
-                        match event {
-                            ClientIoEvent::Disconnected(e) => {
-                                debug!("Stopping mugon receive task. Reason: {:?}", e);
-                                return;
-                            }
-                            _ => {}
+            debug!("Started send task");
+            let mut connected = false;
+            while !connected {
+                tokio::select! {
+                    Ok(success) = recv_connected_event.recv() => {
+                        if success {
+                            connected = true;
+                            debug!("Starting mugon client send task");
+                        } else {
+                            debug!("Stopping mugon receive task. Reason: Mugon client failed to connect");
+                            return;
                         }
+                    },
+                    Ok(event) = close_rx_for_send_task.recv() => {
+                            match event {
+                                ClientIoEvent::Disconnected(e) => {
+                                    debug!("Stopping mugon receive task. Reason: {:?}", e);
+                                    return;
+                                }
+                                _ => {}
+                            }
                     }
+                    _ = crate::transport::mugon::common::yield_to_browser() => {}
+                }
             }
             loop {
                 debug!("Client waiting for send");
@@ -135,6 +141,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                         }
                     },
                     recv = to_server_receiver.recv() => {
+                        debug!("Client send command received");
                         if let Some(msg) = recv {
                             // info!("Client sending to id {} message: {:?}", server_id, msg);
                             debug!("Client sending");
@@ -144,9 +151,11 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                             }
                             debug!("Client sent");
                         } else {
+                            debug!("Client sending, but None found");
                             return;
                         }
                     }
+                    _ = crate::transport::mugon::common::yield_to_browser() => {}
                 }
             }
         });

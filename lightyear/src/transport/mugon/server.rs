@@ -17,6 +17,7 @@ use js_sys::Uint8Array;
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, error, info, warn};
@@ -148,20 +149,33 @@ impl MugonServerSocket {
             .lock()
             .unwrap()
             .insert(addr, clientbound_tx);
-        while let Some(msg) = clientbound_rx.recv().await {
-            match msg {
-                Message::Binary(data) => {
-                    debug!("Server sending");
-                    if !send(socket_addr_to_id(&addr), &*data) {
-                        debug!("Connection with {} lost", addr);
-                        return;
+        let mut closed = false;
+        while !closed {
+            tokio::select! {
+                msg = clientbound_rx.recv() => {
+                    if let Some(msg) = msg {
+                        match msg {
+                        Message::Binary(data) => {
+                            debug!("Server sending");
+                            if !send(socket_addr_to_id(&addr), &*data) {
+                                debug!("Connection with {} lost", addr);
+                                return;
+                            }
+                            debug!("Server sent");
+                        }
+                        Message::Close => {
+                            debug!("Server close received");
+                            close(socket_addr_to_id(&addr));
+                            closed = true;
+                        }
                     }
-                    debug!("Server sent");
-                }
-                Message::Close => {
-                    debug!("Server close received");
-                    close(socket_addr_to_id(&addr));
-                }
+                    } else {
+                        debug!("Server close received");
+                        close(socket_addr_to_id(&addr));
+                        closed = true;
+                    }
+                },
+                _ = crate::transport::mugon::common::yield_to_browser() => {}
             }
         }
         close(socket_addr_to_id(&addr));
