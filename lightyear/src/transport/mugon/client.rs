@@ -123,8 +123,8 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                                 }
                                 _ => {}
                             }
-                    }
-                    _ = crate::transport::mugon::common::yield_to_browser() => {}
+                    },
+                    _ = crate::transport::mugon::common::yield_to_browser() => {debug!("yield")}
                 }
             }
             loop {
@@ -146,7 +146,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                             // info!("Client sending to id {} message: {:?}", server_id, msg);
                             debug!("Client sending");
                             if !send(server_id, msg.as_slice()) {
-                                let _ = status_tx_from_send_task.send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was lost").into())).await.unwrap();
+                                let _ = status_tx_from_send_task.try_send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was lost").into())).unwrap();
                                 return;
                             }
                             debug!("Client sent");
@@ -154,8 +154,8 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                             debug!("Client sending, but None found");
                             return;
                         }
-                    }
-                    _ = crate::transport::mugon::common::yield_to_browser() => {}
+                    },
+                    _ = crate::transport::mugon::common::yield_to_browser() => {debug!("yield")}
                 }
             }
         });

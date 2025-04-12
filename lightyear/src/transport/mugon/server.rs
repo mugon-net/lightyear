@@ -175,7 +175,7 @@ impl MugonServerSocket {
                         closed = true;
                     }
                 },
-                _ = crate::transport::mugon::common::yield_to_browser() => {}
+                _ = crate::transport::mugon::common::yield_to_browser() => {debug!("yield")}
             }
         }
         close(socket_addr_to_id(&addr));
@@ -183,8 +183,8 @@ impl MugonServerSocket {
         clientbound_tx_map.lock().unwrap().remove(&addr);
         // notify netcode that the io task got disconnected
         let _ = status_tx
-            .send(ServerIoEvent::ClientDisconnected(addr))
-            .await;
+            .try_send(ServerIoEvent::ClientDisconnected(addr))
+            .unwrap();
         // dropping the task handles cancels them
     }
 }
