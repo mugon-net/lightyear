@@ -160,65 +160,44 @@ impl MugonServerSocket {
             .lock()
             .unwrap()
             .insert(addr, clientbound_tx);
+
+        let handle_message = |msg: Message| match msg {
+            Message::Binary(data) => {
+                if !send(socket_addr_to_id(&addr), &*data) {
+                    return true;
+                }
+                return false;
+            }
+            Message::Close => {
+                close(socket_addr_to_id(&addr));
+                return true;
+            }
+        };
+
         let mut closed = false;
         while !closed {
-            debug!("handle_client send loop");
-            if let Ok(msg) = clientbound_rx.try_recv() {
-                debug!("handle_client send loop (recv)");
-                match msg {
-                    Message::Binary(data) => {
-                        debug!("Server sending");
-                        if !send(socket_addr_to_id(&addr), &*data) {
-                            debug!("Connection with {} lost", addr);
-                            return;
-                        }
-                        debug!("Server sent");
-                    }
-                    Message::Close => {
-                        debug!("Server close received");
-                        close(socket_addr_to_id(&addr));
-                        closed = true;
-                    }
+            #[cfg(target_arch = "wasm32")]
+            {
+                if let Ok(msg) = clientbound_rx.try_recv() {
+                    closed = handle_message(msg);
+                } else {
+                    crate::transport::mugon::common::yield_to_browser().await;
                 }
-            } else {
-                crate::transport::mugon::common::yield_to_browser().await;
             }
-            // tokio::select! {
-            //     msg = clientbound_rx.recv() => {
-            //         debug!("handle_client send loop (recv)");
-            //         if let Some(msg) = msg {
-            //             match msg {
-            //                 Message::Binary(data) => {
-            //                     debug!("Server sending");
-            //                     if !send(socket_addr_to_id(&addr), &*data) {
-            //                         debug!("Connection with {} lost", addr);
-            //                         return;
-            //                     }
-            //                     debug!("Server sent");
-            //                 }
-            //                 Message::Close => {
-            //                     debug!("Server close received");
-            //                     close(socket_addr_to_id(&addr));
-            //                     closed = true;
-            //                 }
-            //             }
-            //         } else {
-            //             debug!("Server close received");
-            //             close(socket_addr_to_id(&addr));
-            //             closed = true;
-            //         }
-            //     },
-            //     _ = crate::transport::mugon::common::yield_to_browser() => {debug!("yield")}
-            // }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if let Some(msg) = clientbound_rx.recv().await {
+                    closed = handle_message(msg);
+                } else {
+                    closed = true;
+                }
+            }
         }
         close(socket_addr_to_id(&addr));
-        debug!("Connection with {} closed", addr);
         clientbound_tx_map.lock().unwrap().remove(&addr);
-        // notify netcode that the io task got disconnected
         let _ = status_tx
             .try_send(ServerIoEvent::ClientDisconnected(addr))
             .unwrap();
-        // dropping the task handles cancels them
     }
 }
 
@@ -229,7 +208,6 @@ struct MugonServerSocketSender {
 
 impl PacketSender for MugonServerSocketSender {
     fn send(&mut self, payload: &[u8], address: &SocketAddr) -> LightyearResult<()> {
-        debug!("Mugon Server Packet Sender send");
         if let Some(clientbound_tx) = self.addr_to_clientbound_tx.lock().unwrap().get(address) {
             clientbound_tx
                 .send(Message::Binary(payload.to_vec()))
@@ -240,12 +218,10 @@ impl PacketSender for MugonServerSocketSender {
                     )
                 })
         } else {
-            // consider that if the channel doesn't exist, it's because the connection was closed
-            Ok(())
-            // Err(std::io::Error::other(format!(
-            //     "unable to find channel for client: {}",
-            //     address
-            // )))
+            Err(Error::Io(std::io::Error::other(format!(
+                "unable to find channel for client: {}",
+                address
+            ))))
         }
     }
 }
@@ -258,16 +234,14 @@ struct MugonServerSocketReceiver {
 
 impl PacketReceiver for MugonServerSocketReceiver {
     fn recv(&mut self) -> LightyearResult<Option<(&mut [u8], SocketAddr)>> {
-        debug!("Mugon Server Packet Receiver recv");
         match self.serverbound_rx.try_recv() {
             Ok((addr, msg)) => match msg {
                 Message::Binary(buf) => {
-                    debug!("Mugon Server Packet Receiver received");
                     self.buffer[..buf.len()].copy_from_slice(&buf);
                     Ok(Some((&mut self.buffer[..buf.len()], addr)))
                 }
                 Message::Close => {
-                    debug!("Mugon connection closed");
+                    debug!("Mugon connection with {} closed", socket_addr_to_id(&addr));
                     Ok(None)
                 }
             },

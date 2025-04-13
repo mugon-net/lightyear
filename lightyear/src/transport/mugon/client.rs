@@ -35,6 +35,11 @@ extern "C" {
     fn close(id: u64);
 }
 
+enum Message {
+    Binary(Vec<u8>),
+    Close,
+}
+
 pub(crate) struct MugonClientSocketBuilder {
     pub(crate) server_addr: SocketAddr,
     pub(crate) local_addr: SocketAddr,
@@ -52,7 +57,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
         // channels used to pass messages from/to the rest of the lightyear framework
         // TODO: This can exhaust all available memory unless there is some other way to limit the amount of in-flight data in place
         let (to_server_sender, mut to_server_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
-        let (from_server_sender, from_server_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (from_server_sender, from_server_receiver) = mpsc::unbounded_channel::<Message>();
 
         // channel used to cancel the io task and check if it was cancelled
         let (close_tx, close_rx) = async_channel::unbounded();
@@ -69,10 +74,8 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
         let server_id = socket_addr_to_id(&self.server_addr);
 
         let connected_callback: Closure<dyn FnMut(bool)> = Closure::new(move |success: bool| {
-            info!("connected_callback");
             let status_tx_from_connect_task = status_tx_from_connect_task.clone();
             let send_connected_event = send_connected_event.clone();
-            info!("connected_callback A");
             if success {
                 status_tx_from_connect_task
                     .try_send(ClientIoEvent::Connected)
@@ -84,11 +87,12 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                     .unwrap();
                 send_connected_event.try_send(success).unwrap();
             }
-            info!("connected_callback B");
         });
-        let receive_callback: Closure<dyn FnMut(u64, Vec<u8>)> =
-            Closure::new(move |_: u64, data: Vec<u8>| {
-                let _ = from_server_sender.send(data).unwrap();
+        let receive_callback: Closure<dyn FnMut(u64, Option<Vec<u8>>)> =
+            Closure::new(move |_: u64, data: Option<Vec<u8>>| {
+                let _ = from_server_sender
+                    .send(data.map_or_else(|| Message::Close, |d| Message::Binary(d)))
+                    .unwrap();
             });
 
         connect_and_register_callbacks(
@@ -102,36 +106,52 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
 
         // Task for sending outgoing packets
         wasm_bindgen_futures::spawn_local(async move {
-            debug!("Started send task");
-            // let mut connected = false;
-            // while !connected {
-            //     tokio::select! {
-            //         Ok(success) = recv_connected_event.recv() => {
-            //             if success {
-            //                 connected = true;
-            //                 debug!("Starting mugon client send task");
-            //             } else {
-            //                 debug!("Stopping mugon receive task. Reason: Mugon client failed to connect");
-            //                 return;
-            //             }
-            //         },
-            //         Ok(event) = close_rx_for_send_task.recv() => {
-            //                 match event {
-            //                     ClientIoEvent::Disconnected(e) => {
-            //                         debug!("Stopping mugon receive task. Reason: {:?}", e);
-            //                         return;
-            //                     }
-            //                     _ => {}
-            //                 }
-            //         },
-            //         _ = crate::transport::mugon::common::yield_to_browser() => {debug!("yield")}
-            //     }
-            // }
+            let mut connected = false;
+            while !connected {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if let Ok(event) = close_rx_for_send_task.try_recv() {
+                        match event {
+                            ClientIoEvent::Disconnected(e) => {
+                                debug!("Stopping mugon client send task. Reason: {:?}", e);
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let Ok(success) = recv_connected_event.try_recv() {
+                        if success {
+                            connected = true;
+                        } else {
+                            return;
+                        }
+                    }
+                    crate::transport::mugon::common::yield_to_browser().await;
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    tokio::select! {
+                        Ok(success) = recv_connected_event.recv() => {
+                            if success {
+                                connected = true;
+                            } else {
+                                return;
+                            }
+                        },
+                        Ok(event) = close_rx_for_send_task.recv() => {
+                                match event {
+                                    ClientIoEvent::Disconnected(e) => {
+                                        debug!("Stopping mugon receive task. Reason: {:?}", e);
+                                        return;
+                                    }
+                                    _ => {}
+                                }
+                        },
+                    }
+                }
+            }
             loop {
-                debug!("Client waiting for send");
                 if let Ok(msg) = to_server_receiver.try_recv() {
-                    // info!("Client sending to id {} message: {:?}", server_id, msg);
-                    debug!("Client sending");
                     if !send(server_id, msg.as_slice()) {
                         let _ = status_tx_from_send_task
                             .try_send(ClientIoEvent::Disconnected(
@@ -140,39 +160,18 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                             .unwrap();
                         return;
                     }
-                    debug!("Client sent");
                 } else {
+                    if let Ok(event) = close_rx_for_send_task.try_recv() {
+                        match event {
+                            ClientIoEvent::Disconnected(e) => {
+                                debug!("Stopping mugon client send task. Reason: {:?}", e);
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
                     crate::transport::mugon::common::yield_to_browser().await;
                 }
-
-                // tokio::select! {
-                //     Ok(event) = close_rx_for_send_task.recv() => {
-                //         debug!("Client close received");
-                //         match event {
-                //             ClientIoEvent::Disconnected(e) => {
-                //                 debug!("Stopping mugon client send task. Reason: {:?}", e);
-                //                 return;
-                //             }
-                //             _ => {}
-                //         }
-                //     },
-                //     recv = to_server_receiver.recv() => {
-                //         debug!("Client send command received");
-                //         if let Some(msg) = recv {
-                //             // info!("Client sending to id {} message: {:?}", server_id, msg);
-                //             debug!("Client sending");
-                //             if !send(server_id, msg.as_slice()) {
-                //                 let _ = status_tx_from_send_task.try_send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was lost").into())).unwrap();
-                //                 return;
-                //             }
-                //             debug!("Client sent");
-                //         } else {
-                //             debug!("Client sending, but None found");
-                //             return;
-                //         }
-                //     },
-                //     _ = crate::transport::mugon::common::yield_to_browser() => {debug!("yield")}
-                // }
             }
         });
 
@@ -215,7 +214,6 @@ struct MugonClientSocketSender {
 
 impl PacketSender for MugonClientSocketSender {
     fn send(&mut self, payload: &[u8], address: &SocketAddr) -> LightyearResult<()> {
-        debug!("Mugon Client Packet Sender send");
         self.serverbound_tx.send(payload.to_vec()).map_err(|e| {
             std::io::Error::other(format!("unable to send message to server: {:?}", e)).into()
         })
@@ -225,18 +223,22 @@ impl PacketSender for MugonClientSocketSender {
 struct MugonClientSocketReceiver {
     buffer: [u8; MTU],
     server_addr: SocketAddr,
-    clientbound_rx: UnboundedReceiver<Vec<u8>>,
+    clientbound_rx: UnboundedReceiver<Message>,
 }
 
 impl PacketReceiver for MugonClientSocketReceiver {
     fn recv(&mut self) -> LightyearResult<Option<(&mut [u8], SocketAddr)>> {
-        debug!("Mugon Client Packet Receiver recv");
         match self.clientbound_rx.try_recv() {
-            Ok(msg) => {
-                debug!("Mugon Client Packet Receiver received");
-                self.buffer[..msg.len()].copy_from_slice(&msg);
-                Ok(Some((&mut self.buffer[..msg.len()], self.server_addr)))
-            }
+            Ok(msg) => match msg {
+                Message::Binary(msg) => {
+                    self.buffer[..msg.len()].copy_from_slice(&msg);
+                    Ok(Some((&mut self.buffer[..msg.len()], self.server_addr)))
+                }
+                Message::Close => {
+                    debug!("Mugon connection with server closed");
+                    Ok(None)
+                }
+            },
             Err(e) => {
                 if e == TryRecvError::Empty {
                     Ok(None)
