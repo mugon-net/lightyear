@@ -4,7 +4,7 @@ use std::future::Future;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::pin::Pin;
 
-pub const YIELD_DELAY: u32 = 10;
+pub const YIELD_DELAY: u32 = 5;
 
 pub fn socket_addr_to_id(socket_addr: &SocketAddr) -> u64 {
     let SocketAddr::V6(addr) = socket_addr else {

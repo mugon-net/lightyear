@@ -163,7 +163,6 @@ impl MugonServerSocket {
         let mut closed = false;
         while !closed {
             debug!("handle_client send loop");
-            crate::transport::mugon::common::yield_to_browser().await;
             if let Ok(msg) = clientbound_rx.try_recv() {
                 debug!("handle_client send loop (recv)");
                 match msg {
@@ -181,6 +180,8 @@ impl MugonServerSocket {
                         closed = true;
                     }
                 }
+            } else {
+                crate::transport::mugon::common::yield_to_browser().await;
             }
             // tokio::select! {
             //     msg = clientbound_rx.recv() => {

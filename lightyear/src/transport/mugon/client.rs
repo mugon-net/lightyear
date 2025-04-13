@@ -129,7 +129,6 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
             // }
             loop {
                 debug!("Client waiting for send");
-                crate::transport::mugon::common::yield_to_browser().await;
                 if let Ok(msg) = to_server_receiver.try_recv() {
                     // info!("Client sending to id {} message: {:?}", server_id, msg);
                     debug!("Client sending");
@@ -142,6 +141,8 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
                         return;
                     }
                     debug!("Client sent");
+                } else {
+                    crate::transport::mugon::common::yield_to_browser().await;
                 }
 
                 // tokio::select! {
