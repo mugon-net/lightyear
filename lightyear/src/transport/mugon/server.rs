@@ -65,6 +65,8 @@ impl ServerTransportBuilder for MugonServerBuilder {
         // channel used to send/check the status of the io task
         let (status_tx, status_rx) = async_channel::unbounded();
 
+        // TODO Remove from map, to release handle after it finished / client disconnected
+        #[cfg(not(target_arch = "wasm32"))]
         let addr_to_task = Arc::new(Mutex::new(HashMap::<SocketAddr, Task<()>>::new()));
 
         let sender = MugonServerSocketSender {
@@ -81,15 +83,24 @@ impl ServerTransportBuilder for MugonServerBuilder {
 
         let new_connection_callback: Closure<dyn FnMut(u64)> = Closure::new(move |id: u64| {
             let clientbound_tx_map = clientbound_tx_map.clone();
-            let task = IoTaskPool::get().spawn(MugonServerSocket::handle_client(
+            #[cfg(target_arch = "wasm32")]
+            wasm_bindgen_futures::spawn_local(MugonServerSocket::handle_client(
                 id_to_socket_addr(id),
                 clientbound_tx_map,
                 status_tx.clone(),
             ));
-            addr_to_task
-                .lock()
-                .unwrap()
-                .insert(id_to_socket_addr(id), task);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let task = IoTaskPool::get().spawn(MugonServerSocket::handle_client(
+                    id_to_socket_addr(id),
+                    clientbound_tx_map,
+                    status_tx.clone(),
+                ));
+                addr_to_task
+                    .lock()
+                    .unwrap()
+                    .insert(id_to_socket_addr(id), task);
+            }
         });
         let receive_callback: Closure<dyn FnMut(u64, Uint8Array)> =
             Closure::new(move |client_id: u64, data: Uint8Array| {
@@ -151,32 +162,53 @@ impl MugonServerSocket {
             .insert(addr, clientbound_tx);
         let mut closed = false;
         while !closed {
-            tokio::select! {
-                msg = clientbound_rx.recv() => {
-                    if let Some(msg) = msg {
-                        match msg {
-                        Message::Binary(data) => {
-                            debug!("Server sending");
-                            if !send(socket_addr_to_id(&addr), &*data) {
-                                debug!("Connection with {} lost", addr);
-                                return;
-                            }
-                            debug!("Server sent");
+            debug!("handle_client send loop");
+            crate::transport::mugon::common::yield_to_browser().await;
+            if let Ok(msg) = clientbound_rx.try_recv() {
+                debug!("handle_client send loop (recv)");
+                match msg {
+                    Message::Binary(data) => {
+                        debug!("Server sending");
+                        if !send(socket_addr_to_id(&addr), &*data) {
+                            debug!("Connection with {} lost", addr);
+                            return;
                         }
-                        Message::Close => {
-                            debug!("Server close received");
-                            close(socket_addr_to_id(&addr));
-                            closed = true;
-                        }
+                        debug!("Server sent");
                     }
-                    } else {
+                    Message::Close => {
                         debug!("Server close received");
                         close(socket_addr_to_id(&addr));
                         closed = true;
                     }
-                },
-                _ = crate::transport::mugon::common::yield_to_browser() => {debug!("yield")}
+                }
             }
+            // tokio::select! {
+            //     msg = clientbound_rx.recv() => {
+            //         debug!("handle_client send loop (recv)");
+            //         if let Some(msg) = msg {
+            //             match msg {
+            //                 Message::Binary(data) => {
+            //                     debug!("Server sending");
+            //                     if !send(socket_addr_to_id(&addr), &*data) {
+            //                         debug!("Connection with {} lost", addr);
+            //                         return;
+            //                     }
+            //                     debug!("Server sent");
+            //                 }
+            //                 Message::Close => {
+            //                     debug!("Server close received");
+            //                     close(socket_addr_to_id(&addr));
+            //                     closed = true;
+            //                 }
+            //             }
+            //         } else {
+            //             debug!("Server close received");
+            //             close(socket_addr_to_id(&addr));
+            //             closed = true;
+            //         }
+            //     },
+            //     _ = crate::transport::mugon::common::yield_to_browser() => {debug!("yield")}
+            // }
         }
         close(socket_addr_to_id(&addr));
         debug!("Connection with {} closed", addr);

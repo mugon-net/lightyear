@@ -103,60 +103,75 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
         // Task for sending outgoing packets
         wasm_bindgen_futures::spawn_local(async move {
             debug!("Started send task");
-            let mut connected = false;
-            while !connected {
-                tokio::select! {
-                    Ok(success) = recv_connected_event.recv() => {
-                        if success {
-                            connected = true;
-                            debug!("Starting mugon client send task");
-                        } else {
-                            debug!("Stopping mugon receive task. Reason: Mugon client failed to connect");
-                            return;
-                        }
-                    },
-                    Ok(event) = close_rx_for_send_task.recv() => {
-                            match event {
-                                ClientIoEvent::Disconnected(e) => {
-                                    debug!("Stopping mugon receive task. Reason: {:?}", e);
-                                    return;
-                                }
-                                _ => {}
-                            }
-                    },
-                    _ = crate::transport::mugon::common::yield_to_browser() => {debug!("yield")}
-                }
-            }
+            // let mut connected = false;
+            // while !connected {
+            //     tokio::select! {
+            //         Ok(success) = recv_connected_event.recv() => {
+            //             if success {
+            //                 connected = true;
+            //                 debug!("Starting mugon client send task");
+            //             } else {
+            //                 debug!("Stopping mugon receive task. Reason: Mugon client failed to connect");
+            //                 return;
+            //             }
+            //         },
+            //         Ok(event) = close_rx_for_send_task.recv() => {
+            //                 match event {
+            //                     ClientIoEvent::Disconnected(e) => {
+            //                         debug!("Stopping mugon receive task. Reason: {:?}", e);
+            //                         return;
+            //                     }
+            //                     _ => {}
+            //                 }
+            //         },
+            //         _ = crate::transport::mugon::common::yield_to_browser() => {debug!("yield")}
+            //     }
+            // }
             loop {
                 debug!("Client waiting for send");
-                tokio::select! {
-                    Ok(event) = close_rx_for_send_task.recv() => {
-                        debug!("Client close received");
-                        match event {
-                            ClientIoEvent::Disconnected(e) => {
-                                debug!("Stopping mugon client send task. Reason: {:?}", e);
-                                return;
-                            }
-                            _ => {}
-                        }
-                    },
-                    recv = to_server_receiver.recv() => {
-                        debug!("Client send command received");
-                        if let Some(msg) = recv {
-                            // info!("Client sending to id {} message: {:?}", server_id, msg);
-                            debug!("Client sending");
-                            if !send(server_id, msg.as_slice()) {
-                                let _ = status_tx_from_send_task.try_send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was lost").into())).unwrap();
-                                return;
-                            }
-                            debug!("Client sent");
-                        } else {
-                            debug!("Client sending, but None found");
-                            return;
-                        }
-                    },
-                    _ = crate::transport::mugon::common::yield_to_browser() => {debug!("yield")}
+                crate::transport::mugon::common::yield_to_browser().await;
+                if let Ok(msg) = to_server_receiver.try_recv() {
+                    // info!("Client sending to id {} message: {:?}", server_id, msg);
+                    debug!("Client sending");
+                    if !send(server_id, msg.as_slice()) {
+                        let _ = status_tx_from_send_task
+                            .try_send(ClientIoEvent::Disconnected(
+                                std::io::Error::other("mugon connection was lost").into(),
+                            ))
+                            .unwrap();
+                        return;
+                    }
+                    debug!("Client sent");
                 }
+
+                // tokio::select! {
+                //     Ok(event) = close_rx_for_send_task.recv() => {
+                //         debug!("Client close received");
+                //         match event {
+                //             ClientIoEvent::Disconnected(e) => {
+                //                 debug!("Stopping mugon client send task. Reason: {:?}", e);
+                //                 return;
+                //             }
+                //             _ => {}
+                //         }
+                //     },
+                //     recv = to_server_receiver.recv() => {
+                //         debug!("Client send command received");
+                //         if let Some(msg) = recv {
+                //             // info!("Client sending to id {} message: {:?}", server_id, msg);
+                //             debug!("Client sending");
+                //             if !send(server_id, msg.as_slice()) {
+                //                 let _ = status_tx_from_send_task.try_send(ClientIoEvent::Disconnected(std::io::Error::other("mugon connection was lost").into())).unwrap();
+                //                 return;
+                //             }
+                //             debug!("Client sent");
+                //         } else {
+                //             debug!("Client sending, but None found");
+                //             return;
+                //         }
+                //     },
+                //     _ = crate::transport::mugon::common::yield_to_browser() => {debug!("yield")}
+                // }
             }
         });
 
