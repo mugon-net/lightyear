@@ -29,8 +29,12 @@ use wasm_bindgen_futures::JsFuture;
 #[wasm_bindgen]
 extern "C" {
     // TODO Also disconnect / status callback?
-    #[wasm_bindgen(js_namespace = window, js_name = hostAndRegisterCallbacks)]
-    fn host_and_register_callbacks(new_connection_callback: &JsValue, receive_callback: &JsValue);
+    #[wasm_bindgen(js_namespace = window, js_name = registerCallbacks)]
+    fn register_callbacks(
+        on_new_connection_callback: &JsValue,
+        on_new_message: &JsValue,
+        on_disconnected_from: &JsValue,
+    );
 
     #[wasm_bindgen(js_namespace = window, js_name = sendFromMugonSocket)]
     fn send(to_id: u64, value: &[u8]) -> bool;
@@ -64,6 +68,7 @@ impl ServerTransportBuilder for MugonServerBuilder {
 
         // channel used to send/check the status of the io task
         let (status_tx, status_rx) = async_channel::unbounded();
+        let status_tx_2 = status_tx.clone();
 
         // TODO Remove from map, to release handle after it finished / client disconnected
         #[cfg(not(target_arch = "wasm32"))]
@@ -81,7 +86,7 @@ impl ServerTransportBuilder for MugonServerBuilder {
 
         status_tx.try_send(ServerIoEvent::ServerConnected)?;
 
-        let new_connection_callback: Closure<dyn FnMut(u64)> = Closure::new(move |id: u64| {
+        let on_new_connection_callback: Closure<dyn FnMut(u64)> = Closure::new(move |id: u64| {
             let clientbound_tx_map = clientbound_tx_map.clone();
             #[cfg(target_arch = "wasm32")]
             wasm_bindgen_futures::spawn_local(MugonServerSocket::handle_client(
@@ -102,7 +107,7 @@ impl ServerTransportBuilder for MugonServerBuilder {
                     .insert(id_to_socket_addr(id), task);
             }
         });
-        let receive_callback: Closure<dyn FnMut(u64, Uint8Array)> =
+        let on_new_message: Closure<dyn FnMut(u64, Uint8Array)> =
             Closure::new(move |client_id: u64, data: Uint8Array| {
                 let addr = id_to_socket_addr(client_id);
                 serverbound_tx
@@ -110,14 +115,23 @@ impl ServerTransportBuilder for MugonServerBuilder {
                     .unwrap_or_else(|e| error!("receive mugon socket error: {:?}", e));
             });
 
-        host_and_register_callbacks(
-            &new_connection_callback.as_ref().unchecked_ref(),
-            &receive_callback.as_ref().unchecked_ref(),
+        let on_disconnected_from: Closure<dyn FnMut(u64)> = Closure::new(move |id: u64| {
+            let addr = id_to_socket_addr(id);
+            status_tx_2
+                .try_send(ServerIoEvent::ClientDisconnected(addr))
+                .unwrap_or_else(|e| error!("receive disconnected from socket: {:?}", e));
+        });
+
+        register_callbacks(
+            &on_new_connection_callback.as_ref().unchecked_ref(),
+            &on_new_message.as_ref().unchecked_ref(),
+            &on_disconnected_from.as_ref().unchecked_ref(),
         );
 
         // Leaking closures to js, so they continue to function after connect call has returned
-        new_connection_callback.forget();
-        receive_callback.forget();
+        on_new_connection_callback.forget();
+        on_new_message.forget();
+        on_disconnected_from.forget();
 
         Ok((
             ServerTransportEnum::Mugon(MugonServerSocket {

@@ -2,10 +2,11 @@
 
 use crate::client::io::transport::{ClientTransportBuilder, ClientTransportEnum};
 use crate::client::io::{ClientIoEvent, ClientIoEventReceiver, ClientNetworkEventSender};
+use crate::server::io::ServerIoEvent;
 use crate::transport::error::Error::NotConnected;
 use crate::transport::error::{Error, Result as LightyearResult};
 use crate::transport::io::IoState;
-use crate::transport::mugon::common::socket_addr_to_id;
+use crate::transport::mugon::common::{id_to_socket_addr, socket_addr_to_id};
 use crate::transport::{
     BoxedReceiver, BoxedSender, PacketReceiver, PacketSender, Transport, LOCAL_SOCKET, MTU,
 };
@@ -18,15 +19,19 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::{Receiver, Sender};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use wasm_bindgen::prelude::{wasm_bindgen, Closure};
 use wasm_bindgen::{JsCast, JsValue};
 
 #[wasm_bindgen]
 extern "C" {
     // TODO Also disconnect / status callback?
-    #[wasm_bindgen(js_namespace = window, js_name = connectAndRegisterCallbacks)]
-    fn connect_and_register_callbacks(connected_callback: &JsValue, receive_callback: &JsValue);
+    #[wasm_bindgen(js_namespace = window, js_name = registerCallbacks)]
+    fn register_callbacks(
+        on_new_connection_callback: &JsValue,
+        on_new_message: &JsValue,
+        on_disconnected_from: &JsValue,
+    );
 
     #[wasm_bindgen(js_namespace = window, js_name = sendFromMugonSocket)]
     fn send(to_id: u64, value: &[u8]) -> bool;
@@ -66,6 +71,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
         // channel used to send/check the status of the io task
         let (status_tx_from_connect_task, status_rx) = async_channel::unbounded();
         let status_tx_from_send_task = status_tx_from_connect_task.clone();
+        let status_tx_from_disconnect_callback = status_tx_from_connect_task.clone();
 
         // channel used to signal from the connect task to the send task, if the connection init was successful
         let (send_connected_event, recv_connected_event) = async_channel::unbounded();
@@ -73,36 +79,45 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
         let local_id = socket_addr_to_id(&self.local_addr);
         let server_id = socket_addr_to_id(&self.server_addr);
 
-        let connected_callback: Closure<dyn FnMut(bool)> = Closure::new(move |success: bool| {
-            let status_tx_from_connect_task = status_tx_from_connect_task.clone();
-            let send_connected_event = send_connected_event.clone();
-            if success {
-                status_tx_from_connect_task
-                    .try_send(ClientIoEvent::Connected)
-                    .unwrap();
-                send_connected_event.try_send(success).unwrap();
-            } else {
-                status_tx_from_connect_task
-                    .try_send(ClientIoEvent::Disconnected(NotConnected))
-                    .unwrap();
-                send_connected_event.try_send(success).unwrap();
-            }
-        });
-        let receive_callback: Closure<dyn FnMut(u64, Option<Vec<u8>>)> =
+        let on_new_connection_callback: Closure<dyn FnMut(bool)> =
+            Closure::new(move |success: bool| {
+                let status_tx_from_connect_task = status_tx_from_connect_task.clone();
+                let send_connected_event = send_connected_event.clone();
+                if success {
+                    status_tx_from_connect_task
+                        .try_send(ClientIoEvent::Connected)
+                        .unwrap();
+                    send_connected_event.try_send(success).unwrap();
+                } else {
+                    status_tx_from_connect_task
+                        .try_send(ClientIoEvent::Disconnected(NotConnected))
+                        .unwrap();
+                    send_connected_event.try_send(success).unwrap();
+                }
+            });
+        let on_new_message: Closure<dyn FnMut(u64, Option<Vec<u8>>)> =
             Closure::new(move |_: u64, data: Option<Vec<u8>>| {
                 let _ = from_server_sender
                     .send(data.map_or_else(|| Message::Close, |d| Message::Binary(d)))
                     .unwrap();
             });
 
-        connect_and_register_callbacks(
-            &connected_callback.as_ref().unchecked_ref(),
-            &receive_callback.as_ref().unchecked_ref(),
+        let on_disconnected_from: Closure<dyn FnMut(u64)> = Closure::new(move |id: u64| {
+            status_tx_from_disconnect_callback
+                .try_send(ClientIoEvent::Disconnected(Error::UserRequest))
+                .unwrap_or_else(|e| error!("receive disconnected from socket: {:?}", e));
+        });
+
+        register_callbacks(
+            &on_new_connection_callback.as_ref().unchecked_ref(),
+            &on_new_message.as_ref().unchecked_ref(),
+            &on_disconnected_from.as_ref().unchecked_ref(),
         );
 
         // Leaking closures to js, so they continue to function after connect call has returned
-        connected_callback.forget();
-        receive_callback.forget();
+        on_new_connection_callback.forget();
+        on_new_message.forget();
+        on_disconnected_from.forget();
 
         // Task for sending outgoing packets
         wasm_bindgen_futures::spawn_local(async move {
