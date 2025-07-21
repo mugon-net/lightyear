@@ -28,6 +28,7 @@ extern "C" {
     // TODO Also disconnect / status callback?
     #[wasm_bindgen(js_namespace = window, js_name = registerCallbacks)]
     fn register_callbacks(
+        own_id: u64,
         on_new_connection_callback: &JsValue,
         on_new_message: &JsValue,
         on_disconnected_from: &JsValue,
@@ -109,6 +110,7 @@ impl ClientTransportBuilder for MugonClientSocketBuilder {
         });
 
         register_callbacks(
+            local_id,
             &on_new_connection_callback.as_ref().unchecked_ref(),
             &on_new_message.as_ref().unchecked_ref(),
             &on_disconnected_from.as_ref().unchecked_ref(),
